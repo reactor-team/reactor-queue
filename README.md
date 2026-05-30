@@ -55,13 +55,13 @@ Reactor who needs to meter live access to a model:
 
 ```
    Browser (your app)                    PartyKit room (you deploy)            Reactor Coordinator
- ┌─────────────────────┐  WebSocket   ┌────────────────────────────┐  REST   ┌────────────────────┐
- │ @reactor-team/queue  │◀───────────▶│ @reactor-team/queue-server  │────────▶│ POST /tokens        │
- │  • partysocket       │   queue +   │  • FIFO queue + N-slot gate │         │ GET  /sessions/{id} │
- │  • getJwt() resolver │   tokens    │  • mints 60s Reactor JWTs   │         │ DELETE /sessions/{id}│
- │  • zustand store     │             │  • per-user session timer   │         └────────────────────┘
- └──────────┬──────────┘             │  • stops + reaps sessions   │
-            │                         └────────────────────────────┘
+ ┌─────────────────────┐  WebSocket  ┌────────────────────────────┐  REST   ┌──────────────────────┐
+ │ @reactor-team/queue │◀───────────▶│ @reactor-team/queue-server │────────▶│ POST /tokens         │
+ │  • partysocket      │   queue +   │  • FIFO queue + N-slot gate│         │ GET  /sessions/{id}  │
+ │  • getJwt() resolver│   tokens    │  • mints 60s Reactor JWTs  │         │ DELETE /sessions/{id}│
+ │  • zustand store    │             │  • per-user session timer  │         └──────────────────────┘
+ └──────────┬──────────┘             │  • stops + reaps sessions  │
+            │                        └────────────────────────────┘
             │ getJwt + sessionId
             ▼
    @reactor-team/js-sdk  ───────────────────── WebRTC ─────────────────────▶  GPU / model
