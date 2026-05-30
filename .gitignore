@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.turbo/
+.next/
+out/
+.partykit/
+*.tsbuildinfo
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# env / secrets — never commit
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/

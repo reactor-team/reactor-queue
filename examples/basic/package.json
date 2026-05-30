@@ -1,0 +1,33 @@
+{
+  "name": "@reactor-team/queue-example-basic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal single-page example: the Helios model gated behind the queue, auto-sends one prompt on connect.",
+  "scripts": {
+    "dev": "concurrently -n web,party -c blue,magenta \"pnpm dev:web\" \"pnpm dev:party\"",
+    "dev:web": "next dev",
+    "dev:party": "partykit dev",
+    "build": "next build",
+    "start": "next start",
+    "deploy:party": "partykit deploy --with-vars"
+  },
+  "dependencies": {
+    "@reactor-models/helios": "^0.9.0",
+    "@reactor-team/js-sdk": "^2.11.1",
+    "@reactor-team/queue": "workspace:*",
+    "hls.js": "^1.6.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@reactor-team/queue-server": "workspace:*",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "concurrently": "^9.1.0",
+    "partykit": "^0.0.115",
+    "typescript": "^5.9.0"
+  }
+}

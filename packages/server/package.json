@@ -1,0 +1,34 @@
+{
+  "name": "@reactor-team/queue-server",
+  "version": "0.1.0",
+  "description": "PartyKit queue/waiting-room server for Reactor demos: FIFO admission gating, short-lived Reactor JWT minting, per-user session timers, and session reaping.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@reactor-team/queue-protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "partykit": "*"
+  },
+  "devDependencies": {
+    "partykit": "^0.0.115",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  }
+}
