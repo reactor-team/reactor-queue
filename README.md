@@ -22,7 +22,7 @@ library is that missing layer.
 
 Three concrete reasons teams reach for it:
 
-- **It makes a demo feel alive.** A visible line ("you're #42, ~6 min") signals
+- **It makes a demo feel alive.** A visible line ("you're #5, ~30 sec") signals
   that the thing is real, in-demand, and worth waiting for. Used in the right
   measure, scarcity is a feature — it turns a launch into an event and can help
   drive word-of-mouth instead of a flat "try it" button that quietly 429s under
