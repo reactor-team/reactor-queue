@@ -3,7 +3,12 @@
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { ReactorQueueProvider, useReactorQueue } from "@reactor-team/queue/react";
 import { useReactor } from "@reactor-team/js-sdk";
-import { HeliosProvider, HeliosMainVideoView, useHelios } from "@reactor-models/helios";
+import {
+  HeliosProvider,
+  HeliosMainVideoView,
+  useHelios,
+  useHeliosConditionsReady,
+} from "@reactor-models/helios";
 
 const PARTYKIT_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST;
 
@@ -162,9 +167,22 @@ function Session({ onLeave }: { onLeave: () => void }) {
 // As soon as Helios is ready, send one prompt and start generating — no control
 // UI. The ref guards against re-sending; it resets if the session drops so a
 // reconnect re-primes the scene.
+//
+// `set_prompt` is processed into conditioning asynchronously and emits
+// `conditions_ready` when the model can actually generate; calling `start()`
+// before that is a no-op (the race that left generation un-started). So we park
+// the conditions_ready resolver BEFORE sending the prompt — registering after
+// would race the model's reply — then await it before `start()`.
 function AutoPrompt() {
   const { status, setPrompt, start } = useHelios();
   const sent = useRef(false);
+  const conditionsReady = useRef<(() => void) | null>(null);
+
+  useHeliosConditionsReady(() => {
+    conditionsReady.current?.();
+    conditionsReady.current = null;
+  });
+
   useEffect(() => {
     if (status !== "ready") {
       sent.current = false;
@@ -173,10 +191,17 @@ function AutoPrompt() {
     if (sent.current) return;
     sent.current = true;
     void (async () => {
+      const ready = new Promise<void>((resolve) => {
+        conditionsReady.current = resolve;
+        // Fallback so a missed event never hangs generation forever.
+        setTimeout(resolve, 10_000);
+      });
       await setPrompt({ prompt: PROMPT });
+      await ready;
       await start();
     })();
   }, [status, setPrompt, start]);
+
   return null;
 }
 
