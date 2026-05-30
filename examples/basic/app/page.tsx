@@ -8,6 +8,7 @@ import {
   HeliosMainVideoView,
   useHelios,
   useHeliosConditionsReady,
+  useHeliosCommandError,
 } from "@reactor-models/helios";
 
 const PARTYKIT_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST;
@@ -164,43 +165,44 @@ function Session({ onLeave }: { onLeave: () => void }) {
   );
 }
 
-// As soon as Helios is ready, send one prompt and start generating — no control
-// UI. The ref guards against re-sending; it resets if the session drops so a
-// reconnect re-primes the scene.
-//
-// `set_prompt` is processed into conditioning asynchronously and emits
-// `conditions_ready` when the model can actually generate; calling `start()`
-// before that is a no-op (the race that left generation un-started). So we park
-// the conditions_ready resolver BEFORE sending the prompt — registering after
-// would race the model's reply — then await it before `start()`.
+// Drive Helios with zero control UI, race-free:
+//   1. on ready, arm the scene with a single set_prompt;
+//   2. start() ONLY once the model emits conditions_ready with has_prompt:true.
+//      Awaiting the setPrompt() promise isn't enough — it resolves when the
+//      command is sent, not once the server has registered the prompt, so a
+//      start() right after can beat it and fail "No prompt set". conditions_ready
+//      is the model's own "start will succeed now" signal.
+//   3. if start is still rejected, re-arm the prompt; the next conditions_ready
+//      retries. Refs reset on disconnect so a reconnect re-primes the scene.
 function AutoPrompt() {
   const { status, setPrompt, start } = useHelios();
-  const sent = useRef(false);
-  const conditionsReady = useRef<(() => void) | null>(null);
+  const promptSent = useRef(false);
+  const started = useRef(false);
 
-  useHeliosConditionsReady(() => {
-    conditionsReady.current?.();
-    conditionsReady.current = null;
+  useHeliosConditionsReady((msg) => {
+    if (msg.has_prompt && !started.current) {
+      started.current = true;
+      void start();
+    }
+  });
+
+  useHeliosCommandError((msg) => {
+    if (msg.command === "start") {
+      started.current = false;
+      void setPrompt({ prompt: PROMPT });
+    }
   });
 
   useEffect(() => {
     if (status !== "ready") {
-      sent.current = false;
+      promptSent.current = false;
+      started.current = false;
       return;
     }
-    if (sent.current) return;
-    sent.current = true;
-    void (async () => {
-      const ready = new Promise<void>((resolve) => {
-        conditionsReady.current = resolve;
-        // Fallback so a missed event never hangs generation forever.
-        setTimeout(resolve, 10_000);
-      });
-      await setPrompt({ prompt: PROMPT });
-      await ready;
-      await start();
-    })();
-  }, [status, setPrompt, start]);
+    if (promptSent.current) return;
+    promptSent.current = true;
+    void setPrompt({ prompt: PROMPT });
+  }, [status, setPrompt]);
 
   return null;
 }
