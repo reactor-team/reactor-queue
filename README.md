@@ -5,11 +5,49 @@
 > hand each admitted user a **short-lived Reactor JWT**, cap how long they can
 > stay, and slide the line forward the instant someone leaves.
 
-Viral launches melt GPUs. This library puts a virtual queue in front of a
-Reactor model so only `N` people are ever live at once — everyone else waits in
-an orderly line and is admitted automatically as slots free up. It is a thin,
-customizable utility built **on top of** the existing Reactor REST API; it does
-not replace or fork anything.
+This library puts a virtual queue in front of a Reactor model so only `N` people
+are ever live at once — everyone else waits in an orderly line and is admitted
+automatically as slots free up. It is a thin, customizable utility built **on
+top of** the existing Reactor REST API; it does not replace or fork anything.
+
+## Why this exists
+
+**Reactor does not gate demand for you.** The platform hands out sessions on
+request up to your account's quota; it has no built-in, dynamic waiting room
+that holds users back and lets them in as capacity frees. Each live session
+also occupies a GPU for its entire duration, so concurrency is a hard,
+finite resource. Without something in front, a burst of traffic simply hits the
+ceiling and users get errors — there is no graceful "you're next" path. This
+library is that missing layer.
+
+Three concrete reasons teams reach for it:
+
+- **It makes a demo feel alive.** A visible line ("you're #42, ~6 min") signals
+  that the thing is real, in-demand, and worth waiting for. Used in the right
+  measure, scarcity is a feature — it turns a launch into an event and can help
+  drive word-of-mouth instead of a flat "try it" button that quietly 429s under
+  load.
+- **It protects a hard capacity ceiling.** During a viral moment, uncapped
+  traffic exhausts GPU capacity and *everyone's* experience breaks. A queue
+  keeps exactly `N` sessions live and time-boxes each turn, so the system stays
+  healthy and the wait stays predictable instead of degrading for all.
+- **It right-sizes demos for scarce or new models.** Private or early-access
+  models (e.g. a model partner's launch) often run on very limited capacity.
+  Set `maxConcurrent` to sit just under the model's known ceiling and the demo
+  runs smoothly within its means — no overcommit, no thrash — while still
+  giving every visitor a fair, automatic turn.
+
+## Who it's for
+
+This is **not** an internal-only Reactor tool. It's for anyone building on
+Reactor who needs to meter live access to a model:
+
+- **Reactor API-platform users** — any developer who wants to add a waiting
+  room to their own Reactor-powered app or demo.
+- **Reactor's own demos** — gating first-party launches and public showcases.
+- **Reactor model partners** launching private/early-access demos *with* Reactor
+  (e.g. Overworld and similar) — capping a small-capacity model to a safe number
+  of concurrent users while still letting a crowd line up.
 
 ---
 
