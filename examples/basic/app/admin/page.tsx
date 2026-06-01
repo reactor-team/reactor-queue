@@ -327,7 +327,7 @@ const s: Record<string, CSSProperties> = {
   },
   h1: { fontSize: 22, fontWeight: 600, margin: 0 },
   h2: { fontSize: 14, fontWeight: 600, margin: "0 0 12px", letterSpacing: 0.3 },
-  muted: { fontSize: 13, color: "#a1a1aa", margin: "4px 0 0", lineHeight: 1.5 },
+  muted: { fontSize: 13, color: "#a1a1aa", marginTop: 4, lineHeight: 1.5 },
   footerMuted: { fontSize: 11, color: "#52525b", marginTop: 32, textAlign: "center" },
   label: { display: "block", fontSize: 12, color: "#a1a1aa", marginTop: 20 },
   input: {
@@ -379,7 +379,8 @@ const s: Record<string, CSSProperties> = {
     gap: 12,
   },
   banner: {
-    border: "1px solid",
+    borderWidth: 1,
+    borderStyle: "solid",
     borderRadius: 8,
     padding: "10px 14px",
     marginBottom: 20,
