@@ -199,6 +199,7 @@ export interface AdminConfigSnapshot {
   coordinatorUrl: string;
   apiVersion: number;
   stopSessionsOnExpiry: boolean;
+  allowDuplicateConnections: boolean;
 }
 
 /** One person waiting in the FIFO queue. */

@@ -329,6 +329,7 @@ All values resolve as **default → `createReactorQueueServer({...})` → env va
 | `RQ_API_VERSION` | `apiVersion` | `1` | `Reactor-API-Version` header |
 | `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry |
 | `RQ_ADMIN_PASSWORD` | `adminPassword` | — (off) | Password for admin dashboard connections |
+| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false` | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`) |
 
 `createReactorQueueServer` also accepts optional **hooks** (not env-configurable):
 

@@ -54,6 +54,13 @@ export interface ReactorQueueServerConfig {
    */
   adminPassword?: string;
 
+  /**
+   * Allow the same browser (stable `clientId`) to hold multiple simultaneous
+   * connections. Default false: a second tab is rejected with `already_connected`.
+   * Env: `RQ_ALLOW_DUPLICATE_CONNECTIONS=true`.
+   */
+  allowDuplicateConnections?: boolean;
+
   /** Optional lifecycle hooks for logging / metrics. Not configurable via env. */
   hooks?: ReactorQueueServerHooks;
 }
@@ -88,6 +95,8 @@ export interface ResolvedConfig {
   capacity: number;
   /** When set, admin WebSocket connections may authenticate with this password. */
   adminPassword: string | null;
+  /** When true, the duplicate-tab (same `clientId`) rejection is disabled. */
+  allowDuplicateConnections: boolean;
 }
 
 const DEFAULT_COORDINATOR_URL = "https://api.reactor.inc";
@@ -199,6 +208,10 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     hooks: config.hooks ?? {},
     capacity: maxSessions * usersPerSession,
     adminPassword: envStr(env, "RQ_ADMIN_PASSWORD") ?? config.adminPassword ?? null,
+    allowDuplicateConnections:
+      envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ??
+      config.allowDuplicateConnections ??
+      false,
   };
 }
 

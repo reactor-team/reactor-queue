@@ -36,6 +36,7 @@ export function configSnapshot(c: ResolvedConfig): AdminConfigSnapshot {
     coordinatorUrl: c.coordinatorUrl,
     apiVersion: c.apiVersion,
     stopSessionsOnExpiry: c.stopSessionsOnExpiry,
+    allowDuplicateConnections: c.allowDuplicateConnections,
   };
 }
 

@@ -162,6 +162,7 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
             <ConfigRow label="Token TTL" value={`${cfg.tokenTtlSeconds}s`} />
             <ConfigRow label="Poll interval" value={`${cfg.pollIntervalMs / 1000}s`} />
             <ConfigRow label="Stop on expiry" value={cfg.stopSessionsOnExpiry ? "yes" : "no"} />
+            <ConfigRow label="Duplicate tabs" value={cfg.allowDuplicateConnections ? "allowed" : "blocked"} />
             <ConfigRow label="WebRTC" value={cfg.webrtcVersion} />
             <ConfigRow label="API version" value={String(cfg.apiVersion)} />
             <ConfigRow label="Coordinator" value={cfg.coordinatorUrl} />

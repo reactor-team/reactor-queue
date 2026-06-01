@@ -335,18 +335,20 @@ export function createReactorQueueServer(
 
         const clientId = url.searchParams.get(CLIENT_ID_QUERY_KEY);
         if (clientId) {
-          const entry = await this.getClientEntry(clientId);
-          if (entry && entry.connId !== conn.id) {
-            const alive =
-              this.connectionsById(entry.connId).length > 0 &&
-              Date.now() - entry.lastSeen < this.config.heartbeatStaleMs;
-            if (alive) {
-              this.send(conn, { type: "rejected", reason: "already_connected" });
-              conn.close(1008, "already_connected");
-              return;
+          if (!this.config.allowDuplicateConnections) {
+            const entry = await this.getClientEntry(clientId);
+            if (entry && entry.connId !== conn.id) {
+              const alive =
+                this.connectionsById(entry.connId).length > 0 &&
+                Date.now() - entry.lastSeen < this.config.heartbeatStaleMs;
+              if (alive) {
+                this.send(conn, { type: "rejected", reason: "already_connected" });
+                conn.close(1008, "already_connected");
+                return;
+              }
+              await this.room.storage.delete(`cid:${clientId}`);
+              await this.room.storage.delete(`conn:${entry.connId}`);
             }
-            await this.room.storage.delete(`cid:${clientId}`);
-            await this.room.storage.delete(`conn:${entry.connId}`);
           }
           await this.setClientEntry(clientId, conn.id);
         }
