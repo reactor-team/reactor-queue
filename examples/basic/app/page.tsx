@@ -2,7 +2,7 @@
 
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { ReactorQueueProvider, useReactorQueue } from "@reactor-team/queue/react";
-import { useReactor } from "@reactor-team/js-sdk";
+import { useReactor } from "@reactor-team/js-sdk"; // StatusDot only
 import {
   HeliosProvider,
   HeliosMainVideoView,
@@ -24,8 +24,8 @@ const PROMPT =
 //
 // One page. <ReactorQueueProvider> owns the waiting-room connection; <Gate>
 // switches on the queue phase; only when the user is `active` do we mount a
-// real Reactor session — getting `getJwt` straight from the queue and reporting
-// the SDK's session id back so the server can time-box and stop it.
+// real Reactor session — `getJwt` from the queue and `sessionId` from admission
+// so the SDK attaches with connect({ sessionId }) instead of creating one.
 export default function Page() {
   if (!PARTYKIT_HOST) {
     return (
@@ -78,10 +78,15 @@ function Gate() {
       return (
         <Center>
           <Card>
+            <p style={{ ...s.muted, marginBottom: 12 }}>
+              <a href="/admin" style={{ color: "#d9b15e", fontSize: 13 }}>
+                Queue admin →
+              </a>
+            </p>
             <Label>You're in line</Label>
             <div style={s.bigNum}>#{q.position}</div>
             <p style={s.muted}>
-              of {q.total} waiting · {q.active}/{q.maxConcurrent} live now
+              of {q.total} waiting · {q.active}/{q.capacity} live now
             </p>
             <Button variant="ghost" onClick={leave}>
               Leave queue
@@ -102,8 +107,18 @@ function Gate() {
         </Center>
       );
 
+    case "starting":
+      return (
+        <Center>
+          <Card>
+            <Spinner />
+            <p style={{ ...s.muted, marginTop: 16 }}>Starting your session…</p>
+          </Card>
+        </Center>
+      );
+
     case "active":
-      return <Session onLeave={leave} />;
+      return q.sessionId ? <Session sessionId={q.sessionId} onLeave={leave} /> : null;
 
     case "expired":
       return (
@@ -142,12 +157,15 @@ function Gate() {
 }
 
 // ── The gated session ─────────────────────────────────────────────────────
-function Session({ onLeave }: { onLeave: () => void }) {
+function Session({ sessionId, onLeave }: { sessionId: string; onLeave: () => void }) {
   const { getJwt, sessionEndsAt } = useReactorQueue();
   return (
     // getJwt is referentially stable — pass it directly, don't wrap in an arrow.
-    // autoConnect is fine here because the user already opted in via "Enter".
-    <HeliosProvider getJwt={getJwt} connectOptions={{ autoConnect: true }}>
+    // sessionId comes from the queue server (POST /sessions on admit).
+    <HeliosProvider
+      getJwt={getJwt}
+      connectOptions={{ autoConnect: true, sessionId }}
+    >
       <SessionBridge />
       <AutoPrompt />
       <div style={s.stage}>
@@ -207,14 +225,9 @@ function AutoPrompt() {
   return null;
 }
 
-// The only glue between the two packages: report the SDK session id to the
-// queue (so the server can time-box / stop it) and free the slot on exit.
+// Free the queue slot when the user leaves the demo page.
 function SessionBridge() {
-  const { reportSession, endSession } = useReactorQueue();
-  const sessionId = useReactor((st) => st.sessionId);
-  useEffect(() => {
-    if (sessionId) reportSession(sessionId);
-  }, [sessionId, reportSession]);
+  const { endSession } = useReactorQueue();
   useEffect(() => () => endSession(), [endSession]);
   return null;
 }

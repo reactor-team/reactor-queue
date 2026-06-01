@@ -1,5 +1,26 @@
 import { DEFAULTS, DEFAULT_ROOM } from "@reactor-team/queue-protocol";
 
+/** Passed to a custom {@link ReactorQueueServerConfig.acquireSession}. */
+export interface AcquireSessionContext {
+  /** The configured model name. */
+  model: string;
+}
+
+/** Passed to a custom {@link ReactorQueueServerConfig.releaseSession}. */
+export interface ReleaseSessionContext {
+  /** The Reactor session the user was in. */
+  sessionId: string;
+  /** The connection id of the user who left. */
+  userId: string;
+  /** Why they left: `timeout`, `grace_timeout`, or `server`. */
+  reason: string;
+  /** True if they were the last member — the session is now empty. */
+  lastMember: boolean;
+}
+
+export type AcquireSessionFn = (ctx: AcquireSessionContext) => Promise<string>;
+export type ReleaseSessionFn = (ctx: ReleaseSessionContext) => Promise<void>;
+
 /**
  * Operator-facing configuration for the queue server.
  *
@@ -9,8 +30,14 @@ import { DEFAULTS, DEFAULT_ROOM } from "@reactor-team/queue-protocol";
  * code and still tune a deployment without a redeploy.
  */
 export interface ReactorQueueServerConfig {
-  /** Max users holding a live Reactor session at once. Env: `RQ_MAX_CONCURRENT`. */
-  maxConcurrent?: number;
+  /** Max concurrent Reactor sessions (GPU ceiling). Env: `RQ_MAX_SESSIONS`. */
+  maxSessions?: number;
+  /** Members per session. Env: `RQ_USERS_PER_SESSION`. */
+  usersPerSession?: number;
+  /** Model name for `POST /sessions`. Env: `RQ_MODEL`. Required. */
+  model?: string;
+  /** WebRTC transport version for session create. Env: `RQ_WEBRTC_VERSION`. */
+  webrtcVersion?: string;
   /** Full session budget after claim, in ms. Env: `RQ_SESSION_DURATION_MS`. */
   sessionDurationMs?: number;
   /** Grace window to claim an admitted slot, in ms. Env: `RQ_ADMISSION_GRACE_MS`. */
@@ -19,8 +46,6 @@ export interface ReactorQueueServerConfig {
   warningBeforeMs?: number;
   /** Requested lifetime for each minted Reactor JWT, in seconds. Env: `RQ_TOKEN_TTL_SECONDS`. */
   tokenTtlSeconds?: number;
-  /** A heartbeat older than this marks a connection dead. Env: `RQ_HEARTBEAT_STALE_MS`. */
-  heartbeatStaleMs?: number;
   /** How often to reconcile tracked sessions with Reactor, in ms. Env: `RQ_POLL_INTERVAL_MS`. */
   pollIntervalMs?: number;
 
@@ -42,35 +67,83 @@ export interface ReactorQueueServerConfig {
    */
   stopSessionsOnExpiry?: boolean;
 
+  /**
+   * Password for admin dashboard connections (`rqAdmin=1` on the WebSocket URL).
+   * Env: `RQ_ADMIN_PASSWORD`. When unset, admin mode is disabled.
+   */
+  adminPassword?: string;
+
+  /**
+   * Allow the same browser (stable `clientId`) to hold multiple simultaneous
+   * connections. Default false: a second tab is rejected with `already_connected`.
+   * Env: `RQ_ALLOW_DUPLICATE_CONNECTIONS=true`.
+   */
+  allowDuplicateConnections?: boolean;
+
+  /**
+   * Override how a session id is obtained when an admitted user `claim()`s.
+   * Default: create one via the Reactor API (`POST /sessions`). Override to
+   * source sessions from elsewhere — e.g. lease a pre-provisioned session from
+   * another service that already has a different kind of client attached.
+   * Called once per session (the first member's claim). Not configurable via
+   * env — pass a function.
+   */
+  acquireSession?: AcquireSessionFn;
+
+  /**
+   * Called when a user **leaves** a session (timeout, disconnect, end, or kick),
+   * with their `userId` and whether they were the `lastMember`. Default: when
+   * the last member leaves, delete the session via the Reactor API
+   * (`DELETE /sessions/{id}`, subject to `stopSessionsOnExpiry`). Override to
+   * keep the session alive and just react to the departure (e.g. hand it back to
+   * the owning service to be reset and reused). Not configurable via env — pass
+   * a function.
+   */
+  releaseSession?: ReleaseSessionFn;
+
   /** Optional lifecycle hooks for logging / metrics. Not configurable via env. */
   hooks?: ReactorQueueServerHooks;
 }
 
 export interface ReactorQueueServerHooks {
-  onAdmit?: (connId: string) => void;
-  onClaim?: (connId: string) => void;
-  onExpire?: (connId: string, sessionId: string | undefined, reason: string) => void;
-  onSessionReaped?: (connId: string, sessionId: string, state: string) => void;
+  onUserConnected?: (connId: string) => void;
+  onUserDisconnected?: (connId: string) => void;
+  onUserEnteredSession?: (connId: string, sessionId: string) => void;
+  onSessionCreated?: (sessionId: string) => void;
+  onSessionClosed?: (sessionId: string, reason: string) => void;
   onError?: (where: string, error: unknown) => void;
 }
 
 /** Fully-resolved config with all values present. */
 export interface ResolvedConfig {
-  maxConcurrent: number;
+  maxSessions: number;
+  usersPerSession: number;
+  model: string;
+  webrtcVersion: string;
   sessionDurationMs: number;
   admissionGraceMs: number;
   warningBeforeMs: number;
   tokenTtlSeconds: number;
-  heartbeatStaleMs: number;
   pollIntervalMs: number;
   coordinatorUrl: string;
   apiKey: string;
   apiVersion: number;
   stopSessionsOnExpiry: boolean;
   hooks: ReactorQueueServerHooks;
+  /** Total live users = maxSessions * usersPerSession. */
+  capacity: number;
+  /** When set, admin WebSocket connections may authenticate with this password. */
+  adminPassword: string | null;
+  /** When true, the duplicate-tab (same `clientId`) rejection is disabled. */
+  allowDuplicateConnections: boolean;
+  /** Custom session acquisition, or null to create via the Reactor API. */
+  acquireSession: AcquireSessionFn | null;
+  /** Custom user-left handler, or null to delete via the Reactor API on last member. */
+  releaseSession: ReleaseSessionFn | null;
 }
 
 const DEFAULT_COORDINATOR_URL = "https://api.reactor.inc";
+const DEFAULT_WEBRTC_VERSION = "1.0";
 
 type Env = Record<string, unknown>;
 
@@ -102,8 +175,7 @@ function pickNum(envVal: number | undefined, cfgVal: number | undefined, def: nu
 
 /**
  * Merge built-in defaults, factory config, and `room.env` into a single
- * resolved config object. Throws if the API key is missing, since the server
- * cannot mint tokens without it.
+ * resolved config object. Throws if the API key or model is missing.
  */
 export function resolveConfig(config: ReactorQueueServerConfig, env: Env): ResolvedConfig {
   const apiKey = envStr(env, "RQ_REACTOR_API_KEY") ?? config.apiKey;
@@ -114,12 +186,29 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     );
   }
 
+  const model = envStr(env, "RQ_MODEL") ?? config.model;
+  if (!model) {
+    throw new Error(
+      "[reactor-queue] No model configured. Set RQ_MODEL (e.g. helios) or pass `model` to createReactorQueueServer()."
+    );
+  }
+
+  const maxSessions = pickNum(
+    envNum(env, "RQ_MAX_SESSIONS"),
+    config.maxSessions,
+    DEFAULTS.maxSessions
+  );
+  const usersPerSession = pickNum(
+    envNum(env, "RQ_USERS_PER_SESSION"),
+    config.usersPerSession,
+    DEFAULTS.usersPerSession
+  );
+
   return {
-    maxConcurrent: pickNum(
-      envNum(env, "RQ_MAX_CONCURRENT"),
-      config.maxConcurrent,
-      DEFAULTS.maxConcurrent
-    ),
+    maxSessions,
+    usersPerSession,
+    model,
+    webrtcVersion: envStr(env, "RQ_WEBRTC_VERSION") ?? config.webrtcVersion ?? DEFAULT_WEBRTC_VERSION,
     sessionDurationMs: pickNum(
       envNum(env, "RQ_SESSION_DURATION_MS"),
       config.sessionDurationMs,
@@ -140,11 +229,6 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
       config.tokenTtlSeconds,
       DEFAULTS.tokenTtlSeconds
     ),
-    heartbeatStaleMs: pickNum(
-      envNum(env, "RQ_HEARTBEAT_STALE_MS"),
-      config.heartbeatStaleMs,
-      DEFAULTS.heartbeatStaleMs
-    ),
     pollIntervalMs: pickNum(
       envNum(env, "RQ_POLL_INTERVAL_MS"),
       config.pollIntervalMs,
@@ -160,6 +244,14 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     stopSessionsOnExpiry:
       envBool(env, "RQ_STOP_SESSIONS") ?? config.stopSessionsOnExpiry ?? true,
     hooks: config.hooks ?? {},
+    capacity: maxSessions * usersPerSession,
+    adminPassword: envStr(env, "RQ_ADMIN_PASSWORD") ?? config.adminPassword ?? null,
+    allowDuplicateConnections:
+      envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ??
+      config.allowDuplicateConnections ??
+      false,
+    acquireSession: config.acquireSession ?? null,
+    releaseSession: config.releaseSession ?? null,
   };
 }
 

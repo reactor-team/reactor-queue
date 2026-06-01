@@ -16,13 +16,18 @@ export const DEFAULT_ROOM = "reactor-queue";
 /** Query-string key used to carry the stable per-browser id on connect. */
 export const CLIENT_ID_QUERY_KEY = "rqClientId";
 
+/** Set to `1` on the WebSocket URL to open an admin connection (not queued). */
+export const ADMIN_MODE_QUERY_KEY = "rqAdmin";
+
 /**
  * Default tunables. Every one of these is overridable from server config and/or
  * environment variables (see `@reactor-team/queue-server`).
  */
 export const DEFAULTS = {
-  /** How many users may hold a live Reactor session at once. */
-  maxConcurrent: 1,
+  /** Max concurrent Reactor sessions (GPU ceiling). */
+  maxSessions: 1,
+  /** Members per session (default 1 = today's behavior; >1 when platform allows N). */
+  usersPerSession: 1,
   /** Full session budget once a user has `claim()`ed their slot. */
   sessionDurationMs: 120_000,
   /**
@@ -34,10 +39,6 @@ export const DEFAULTS = {
   warningBeforeMs: 30_000,
   /** Lifetime requested for each minted Reactor JWT. Deliberately short. */
   tokenTtlSeconds: 60,
-  /** A connection whose heartbeat is older than this is considered dead. */
-  heartbeatStaleMs: 15_000,
-  /** Client heartbeat cadence. Must be < heartbeatStaleMs. */
-  heartbeatIntervalMs: 5_000,
   /**
    * How often the server re-checks tracked live sessions against the Reactor
    * API to catch sessions that ended without a clean `session_ended`/close.
@@ -60,22 +61,38 @@ export interface QueuePositionMessage {
   position: number;
   total: number;
   active: number;
-  maxConcurrent: number;
+  capacity: number;
 }
 
 /**
- * You reached the front and a slot is reserved for you. A `token` message
- * follows immediately. You now have until the admission grace expires to
- * `claim()`.
+ * You reached the front and a capacity slot is reserved for you. No Reactor
+ * session exists yet — the server creates it only when you `claim()`, so an
+ * abandoned grace never leaves an orphaned GPU session. You have until the
+ * admission grace expires to `claim()`.
  */
 export interface AdmittedMessage {
   type: "admitted";
   active: number;
-  maxConcurrent: number;
+  /** Total live users = maxSessions * usersPerSession. */
+  capacity: number;
   /** ms the client has to `claim()` before the slot is reclaimed. */
   graceMs: number;
   /** Full session budget (ms) the client receives once it `claim()`s. For countdown UI. */
   sessionDurationMs: number;
+}
+
+/**
+ * Sent after `claim()`: the server has created (or reused) the Reactor session
+ * for this member. Attach with `connect({ sessionId })`.
+ */
+export interface SessionReadyMessage {
+  type: "session_ready";
+  /** Reactor session id created by the server — attach with connect({ sessionId }). */
+  sessionId: string;
+  /** Full session budget (ms). */
+  sessionDurationMs: number;
+  /** Unix epoch ms when the session ends. */
+  expiresAt: number;
 }
 
 /** A freshly minted, short-lived Reactor JWT. Sent on admission and on each `request_token`. */
@@ -115,6 +132,7 @@ export interface ErrorMessage {
 export type ServerMessage =
   | QueuePositionMessage
   | AdmittedMessage
+  | SessionReadyMessage
   | TokenMessage
   | TimeWarningMessage
   | ExpiredMessage
@@ -125,11 +143,6 @@ export type ServerMessage =
 // Client → Server messages
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Keep-alive so the server can evict stale connections. */
-export interface HeartbeatMessage {
-  type: "heartbeat";
-}
-
 /** "I'm actually entering the demo" — upgrades the grace window to the full session. */
 export interface ClaimMessage {
   type: "claim";
@@ -138,15 +151,6 @@ export interface ClaimMessage {
 /** Ask for a fresh JWT. The server only answers if you currently hold a slot. */
 export interface RequestTokenMessage {
   type: "request_token";
-}
-
-/**
- * Tell the server which Reactor session id this slot is now driving. Lets the
- * server stop the session on expiry and poll it for early drop-out.
- */
-export interface SessionStartedMessage {
-  type: "session_started";
-  sessionId: string;
 }
 
 /** The user ended the Reactor session from the client; free the slot now. */
@@ -160,12 +164,137 @@ export interface LeaveMessage {
 }
 
 export type ClientMessage =
-  | HeartbeatMessage
   | ClaimMessage
   | RequestTokenMessage
-  | SessionStartedMessage
   | SessionEndedMessage
   | LeaveMessage;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin mode (server → admin client)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Read-only server tunables included in every admin snapshot. */
+export interface AdminConfigSnapshot {
+  maxSessions: number;
+  usersPerSession: number;
+  capacity: number;
+  model: string;
+  webrtcVersion: string;
+  sessionDurationMs: number;
+  admissionGraceMs: number;
+  warningBeforeMs: number;
+  tokenTtlSeconds: number;
+  pollIntervalMs: number;
+  coordinatorUrl: string;
+  apiVersion: number;
+  stopSessionsOnExpiry: boolean;
+  allowDuplicateConnections: boolean;
+  /** "default" = queue creates/stops sessions; "custom" = acquire/release overridden. */
+  sessionSource: "default" | "custom";
+}
+
+/** One person waiting in the FIFO queue. */
+export interface AdminQueuedUserSnapshot {
+  connId: string;
+  /** 1-based position in line. */
+  position: number;
+  clientId: string | null;
+}
+
+/** One admitted member (may or may not have claimed yet). */
+export interface AdminMemberSnapshot {
+  connId: string;
+  /** Reactor session id once claimed; null while still in grace (no session yet). */
+  sessionId: string | null;
+  clientId: string | null;
+  claimed: boolean;
+  expiresAt: number;
+  msLeft: number;
+}
+
+/** One capacity slot and its member connection ids. */
+export interface AdminSessionSnapshot {
+  /** Reactor session id, or null while the slot is reserved but unclaimed (no GPU session yet). */
+  sessionId: string | null;
+  members: string[];
+  createdAt: number;
+  msSinceCreated: number;
+}
+
+/** Full room state pushed to authenticated admin connections. */
+export interface AdminSnapshotMessage {
+  type: "admin_snapshot";
+  at: number;
+  activeCount: number;
+  sessionCount: number;
+  config: AdminConfigSnapshot;
+  queue: AdminQueuedUserSnapshot[];
+  sessions: AdminSessionSnapshot[];
+  members: AdminMemberSnapshot[];
+}
+
+/** Admin WebSocket authenticated; snapshots follow on changes. */
+export interface AdminReadyMessage {
+  type: "admin_ready";
+}
+
+export interface AdminRejectedMessage {
+  type: "admin_rejected";
+  reason: "admin_disabled" | "invalid_password" | "auth_required";
+}
+
+export interface AdminActionResultMessage {
+  type: "admin_action_result";
+  action: "kick_member" | "kick_queued" | "close_session";
+  ok: boolean;
+  message?: string;
+}
+
+export type AdminServerMessage =
+  | AdminReadyMessage
+  | AdminRejectedMessage
+  | AdminSnapshotMessage
+  | AdminActionResultMessage;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin mode (admin client → server)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** First message on an admin connection; password must match `RQ_ADMIN_PASSWORD`. */
+export interface AdminAuthMessage {
+  type: "admin_auth";
+  password: string;
+}
+
+/** Remove a member from their session and free capacity (same as forced expiry). */
+export interface AdminKickMemberMessage {
+  type: "admin_kick_member";
+  connId: string;
+}
+
+/** Drop a still-waiting connection from the queue and close its socket. */
+export interface AdminKickQueuedMessage {
+  type: "admin_kick_queued";
+  connId: string;
+}
+
+/** Stop the Reactor session and evict all members. */
+export interface AdminCloseSessionMessage {
+  type: "admin_close_session";
+  sessionId: string;
+}
+
+/** Request a fresh snapshot (also sent automatically on room changes). */
+export interface AdminRefreshMessage {
+  type: "admin_refresh";
+}
+
+export type AdminClientMessage =
+  | AdminAuthMessage
+  | AdminKickMemberMessage
+  | AdminKickQueuedMessage
+  | AdminCloseSessionMessage
+  | AdminRefreshMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -185,7 +314,31 @@ export function parseServerMessage(raw: string): ServerMessage | null {
 export function parseClientMessage(raw: string): ClientMessage | null {
   try {
     const msg = JSON.parse(raw) as ClientMessage;
-    return typeof msg?.type === "string" ? msg : null;
+    if (typeof msg?.type !== "string") return null;
+    if (msg.type.startsWith("admin_")) return null;
+    return msg;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse an admin client message. Returns null on garbage or non-admin types. */
+export function parseAdminClientMessage(raw: string): AdminClientMessage | null {
+  try {
+    const msg = JSON.parse(raw) as AdminClientMessage;
+    if (typeof msg?.type !== "string" || !msg.type.startsWith("admin_")) return null;
+    return msg;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a server message sent to an admin connection. */
+export function parseAdminServerMessage(raw: string): AdminServerMessage | null {
+  try {
+    const msg = JSON.parse(raw) as AdminServerMessage;
+    if (typeof msg?.type !== "string" || !msg.type.startsWith("admin_")) return null;
+    return msg;
   } catch {
     return null;
   }

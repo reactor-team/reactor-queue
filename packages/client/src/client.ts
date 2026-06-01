@@ -45,8 +45,8 @@ interface PendingTokenRequest {
  * fresh short-lived Reactor JWT to the Reactor SDK on demand.
  *
  * It is intentionally decoupled from `@reactor-team/js-sdk`: you wire the two
- * together by passing `getJwt` to the SDK and calling {@link reportSession} when
- * the SDK reports a session id.
+ * together by passing `getJwt` to the SDK and `connectOptions.sessionId` from
+ * {@link ReactorQueueClient.getState}'s `sessionId` (set on admission).
  */
 export class ReactorQueueClient {
   private readonly opts: Required<
@@ -54,7 +54,6 @@ export class ReactorQueueClient {
   > & { clientId: string; party?: string };
 
   private socket: PartySocket | null = null;
-  private heartbeat: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
@@ -70,7 +69,6 @@ export class ReactorQueueClient {
       party: options.party,
       clientId: options.clientId ?? persistentClientId(),
       autoConnect: options.autoConnect ?? false,
-      heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULTS.heartbeatIntervalMs,
       tokenSkewMs: options.tokenSkewMs ?? DEFAULTS.tokenSkewMs,
       tokenRequestTimeoutMs: options.tokenRequestTimeoutMs ?? 10_000,
       retryRejectedMs: options.retryRejectedMs ?? 3_000,
@@ -105,7 +103,7 @@ export class ReactorQueueClient {
       ...INITIAL_STATE,
       phase: "connecting",
       // keep concurrency hints across reconnects so the UI doesn't flicker to 0
-      maxConcurrent: this.state.maxConcurrent,
+      capacity: this.state.capacity,
     });
 
     const socket = new PartySocket({
@@ -116,10 +114,9 @@ export class ReactorQueueClient {
     });
     this.socket = socket;
 
-    this.heartbeat = setInterval(() => {
-      this.send({ type: "heartbeat" });
-    }, this.opts.heartbeatIntervalMs);
-
+    // No app-level heartbeat: the PartyKit platform tracks connection liveness
+    // (and fires the server's onClose on disconnect) even while the room is
+    // hibernated. Heartbeats would wake the hibernated room on every tick.
     socket.addEventListener("message", (evt) => this.handleMessage(String(evt.data)));
     socket.addEventListener("close", () => this.handleClose());
   }
@@ -144,23 +141,16 @@ export class ReactorQueueClient {
     this.connect();
   }
 
-  /** "I'm entering the demo now" — upgrades the grace window to the full session. */
+  /**
+   * "I'm entering the demo now." The server creates the Reactor session and
+   * replies with `session_ready` (carrying `sessionId`). Until then we sit in
+   * `starting` so the UI can show a spinner; we do not have a `sessionId` yet.
+   */
   claim(): void {
     this.send({ type: "claim" });
-    // Optimistically reflect the full session window for countdown UIs.
     if (this.state.phase === "admitted") {
-      const sessionEndsAt = this.state.sessionDurationMs
-        ? Date.now() + this.state.sessionDurationMs
-        : this.state.sessionEndsAt;
-      this.setState({ phase: "active", sessionEndsAt, secondsLeft: null });
+      this.setState({ phase: "starting", secondsLeft: null });
     }
-  }
-
-  /** Tell the server which Reactor session id this slot is driving. */
-  reportSession(sessionId: string): void {
-    if (!sessionId || sessionId === this.state.sessionId) return;
-    this.setState({ sessionId, phase: this.state.phase === "admitted" ? "active" : this.state.phase });
-    this.send({ type: "session_started", sessionId });
   }
 
   /** The Reactor session ended client-side; free the slot so the queue slides. */
@@ -261,7 +251,7 @@ export class ReactorQueueClient {
     this.refreshTimer = setTimeout(
       () => {
         if (this.destroyed) return;
-        if (this.state.phase === "admitted" || this.state.phase === "active") {
+        if (["admitted", "starting", "active"].includes(this.state.phase)) {
           this.requestToken().catch(() => {
             /* reactive getJwt will retry when the SDK next needs a token */
           });
@@ -305,18 +295,32 @@ export class ReactorQueueClient {
           position: msg.position,
           total: msg.total,
           active: msg.active,
-          maxConcurrent: msg.maxConcurrent,
+          capacity: msg.capacity,
         });
         break;
 
       case "admitted":
         this.setState({
-          phase: this.state.phase === "active" ? "active" : "admitted",
+          // Stay in active/starting if a late admitted arrives; otherwise the
+          // user must claim to get a session.
+          phase: this.state.phase === "active" || this.state.phase === "starting"
+            ? this.state.phase
+            : "admitted",
           position: 0,
           total: 0,
           active: msg.active,
-          maxConcurrent: msg.maxConcurrent,
+          capacity: msg.capacity,
           sessionEndsAt: Date.now() + msg.graceMs,
+          sessionDurationMs: msg.sessionDurationMs,
+          secondsLeft: null,
+        });
+        break;
+
+      case "session_ready":
+        this.setState({
+          phase: "active",
+          sessionId: msg.sessionId,
+          sessionEndsAt: msg.expiresAt,
           sessionDurationMs: msg.sessionDurationMs,
           secondsLeft: null,
         });
@@ -356,9 +360,8 @@ export class ReactorQueueClient {
   }
 
   private handleClose(): void {
-    this.stopHeartbeat();
     // Only downgrade phase if we weren't already in a terminal state.
-    if (["connecting", "queued", "admitted", "active"].includes(this.state.phase)) {
+    if (["connecting", "queued", "admitted", "starting", "active"].includes(this.state.phase)) {
       this.setState({ phase: "disconnected" });
     }
   }
@@ -371,15 +374,7 @@ export class ReactorQueueClient {
     }
   }
 
-  private stopHeartbeat(): void {
-    if (this.heartbeat) {
-      clearInterval(this.heartbeat);
-      this.heartbeat = null;
-    }
-  }
-
   private teardownSocket(): void {
-    this.stopHeartbeat();
     if (this.socket) {
       try {
         this.socket.close();

@@ -6,9 +6,11 @@ export type QueuePhase =
   | "connecting"
   /** In line, not yet at the front. */
   | "queued"
-  /** At the front, slot reserved, token available — call `claim()` to enter. */
+  /** At the front, capacity slot reserved — call `claim()` to enter. No session yet. */
   | "admitted"
-  /** User claimed the slot and (typically) has a running Reactor session. */
+  /** Claimed; waiting for the server to create the session and send `session_ready`. */
+  | "starting"
+  /** Session is ready (`sessionId` set); attach with the SDK. */
   | "active"
   /** Time ran out or the slot was reclaimed by the server. */
   | "expired"
@@ -26,8 +28,8 @@ export interface QueueState {
   total: number;
   /** Sessions currently active across all users. */
   active: number;
-  /** Server's concurrency cap. */
-  maxConcurrent: number;
+  /** Total live users the server allows (maxSessions × usersPerSession). */
+  capacity: number;
   /** Current short-lived Reactor JWT, or null. */
   token: string | null;
   /** Unix epoch seconds at which `token` expires. */
@@ -38,7 +40,7 @@ export interface QueueState {
   sessionDurationMs: number | null;
   /** Seconds left as of the last `time_warning`, else null. */
   secondsLeft: number | null;
-  /** Reactor session id this slot is driving, once reported. */
+  /** Reactor session id from the server (set on `admitted`). */
   sessionId: string | null;
   /** Reason for the most recent rejection/expiry/error, if any. */
   reason: string | null;
@@ -49,7 +51,7 @@ export const INITIAL_STATE: QueueState = {
   position: 0,
   total: 0,
   active: 0,
-  maxConcurrent: 0,
+  capacity: 0,
   token: null,
   tokenExpiresAt: null,
   sessionEndsAt: null,
@@ -70,8 +72,6 @@ export interface ReactorQueueClientOptions {
   clientId?: string;
   /** Connect immediately on construction. Default false (the React provider sets this). */
   autoConnect?: boolean;
-  /** Heartbeat cadence in ms. */
-  heartbeatIntervalMs?: number;
   /** Refresh the JWT this many ms before it expires. */
   tokenSkewMs?: number;
   /** How long `getJwt()` waits for a fresh token before rejecting. */

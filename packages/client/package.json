@@ -17,6 +17,16 @@
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js",
       "require": "./dist/react.cjs"
+    },
+    "./admin": {
+      "types": "./dist/admin-client.d.ts",
+      "import": "./dist/admin-client.js",
+      "require": "./dist/admin-client.cjs"
+    },
+    "./admin/react": {
+      "types": "./dist/admin-react.d.ts",
+      "import": "./dist/admin-react.js",
+      "require": "./dist/admin-react.cjs"
     }
   },
   "files": ["dist"],
