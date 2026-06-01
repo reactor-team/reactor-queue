@@ -256,6 +256,24 @@ export function createReactorQueueServer(
       return { ok: true };
     }
 
+    private async adminKickQueued(connId: string): Promise<{ ok: boolean; message?: string }> {
+      const queue = await this.getQueue();
+      const idx = queue.indexOf(connId);
+      if (idx === -1) return { ok: false, message: "not_in_queue" };
+      queue.splice(idx, 1);
+      await this.setQueue(queue);
+      for (const conn of this.connectionsById(connId)) {
+        try {
+          conn.close(1000, "evicted");
+        } catch {
+          /* already gone */
+        }
+      }
+      this.scheduleBroadcast();
+      this.scheduleAdminBroadcast();
+      return { ok: true };
+    }
+
     private async adminCloseSession(sessionId: string): Promise<{ ok: boolean; message?: string }> {
       const record = await this.getSessionRecord(sessionId);
       if (!record) return { ok: false, message: "session_not_found" };
@@ -396,6 +414,17 @@ export function createReactorQueueServer(
               this.sendAdmin(sender, {
                 type: "admin_action_result",
                 action: "kick_member",
+                ok: result.ok,
+                message: result.message,
+              });
+              if (result.ok) this.sendAdmin(sender, await this.buildSnapshot());
+              break;
+            }
+            case "admin_kick_queued": {
+              const result = await this.adminKickQueued(adminMsg.connId);
+              this.sendAdmin(sender, {
+                type: "admin_action_result",
+                action: "kick_queued",
                 ok: result.ok,
                 message: result.message,
               });

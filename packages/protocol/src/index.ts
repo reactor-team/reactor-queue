@@ -237,7 +237,7 @@ export interface AdminRejectedMessage {
 
 export interface AdminActionResultMessage {
   type: "admin_action_result";
-  action: "kick_member" | "close_session";
+  action: "kick_member" | "kick_queued" | "close_session";
   ok: boolean;
   message?: string;
 }
@@ -264,6 +264,12 @@ export interface AdminKickMemberMessage {
   connId: string;
 }
 
+/** Drop a still-waiting connection from the queue and close its socket. */
+export interface AdminKickQueuedMessage {
+  type: "admin_kick_queued";
+  connId: string;
+}
+
 /** Stop the Reactor session and evict all members. */
 export interface AdminCloseSessionMessage {
   type: "admin_close_session";
@@ -278,6 +284,7 @@ export interface AdminRefreshMessage {
 export type AdminClientMessage =
   | AdminAuthMessage
   | AdminKickMemberMessage
+  | AdminKickQueuedMessage
   | AdminCloseSessionMessage
   | AdminRefreshMessage;
 

@@ -102,6 +102,10 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
   }
 
   const cfg = snapshot.config;
+  const memberByConn = new Map(snapshot.members.map((m) => [m.connId, m]));
+  const waiting = snapshot.queue.length;
+  const live = snapshot.members.length;
+  const total = waiting + live;
 
   return (
     <Shell wide>
@@ -109,8 +113,7 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
         <div>
           <h1 style={s.h1}>Queue admin</h1>
           <p style={s.muted}>
-            {snapshot.activeCount}/{cfg.capacity} live · {snapshot.sessionCount}/{cfg.maxSessions}{" "}
-            sessions · {snapshot.queue.length} waiting
+            Live at {new Date(snapshot.at).toLocaleTimeString()} · updates push over the WebSocket
           </p>
         </div>
         <div style={s.headerActions}>
@@ -145,100 +148,75 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
         </div>
       )}
 
-      <section style={s.section}>
-        <h2 style={s.h2}>Configuration</h2>
-        <div style={s.configGrid}>
-          <ConfigItem label="Model" value={cfg.model} />
-          <ConfigItem label="Max sessions" value={String(cfg.maxSessions)} />
-          <ConfigItem label="Users / session" value={String(cfg.usersPerSession)} />
-          <ConfigItem label="Capacity" value={String(cfg.capacity)} />
-          <ConfigItem label="Session duration" value={`${cfg.sessionDurationMs / 1000}s`} />
-          <ConfigItem label="Admission grace" value={`${cfg.admissionGraceMs / 1000}s`} />
-          <ConfigItem label="Token TTL" value={`${cfg.tokenTtlSeconds}s`} />
-          <ConfigItem label="Stop on expiry" value={cfg.stopSessionsOnExpiry ? "yes" : "no"} />
-          <ConfigItem label="Coordinator" value={cfg.coordinatorUrl} wide />
-        </div>
-      </section>
+      {/* Top: config (1/4) + big numbers (3/4) */}
+      <div style={s.topGrid}>
+        <Card>
+          <h2 style={s.h2}>Configuration</h2>
+          <div style={s.cfgList}>
+            <ConfigRow label="Model" value={cfg.model} />
+            <ConfigRow label="Max sessions" value={String(cfg.maxSessions)} />
+            <ConfigRow label="Users / session" value={String(cfg.usersPerSession)} />
+            <ConfigRow label="Capacity" value={String(cfg.capacity)} />
+            <ConfigRow label="Session duration" value={`${cfg.sessionDurationMs / 1000}s`} />
+            <ConfigRow label="Admission grace" value={`${cfg.admissionGraceMs / 1000}s`} />
+            <ConfigRow label="Token TTL" value={`${cfg.tokenTtlSeconds}s`} />
+            <ConfigRow label="Poll interval" value={`${cfg.pollIntervalMs / 1000}s`} />
+            <ConfigRow label="Stop on expiry" value={cfg.stopSessionsOnExpiry ? "yes" : "no"} />
+            <ConfigRow label="WebRTC" value={cfg.webrtcVersion} />
+            <ConfigRow label="API version" value={String(cfg.apiVersion)} />
+            <ConfigRow label="Coordinator" value={cfg.coordinatorUrl} />
+          </div>
+        </Card>
 
-      <div style={s.columns}>
-        <section style={s.section}>
-          <h2 style={s.h2}>Waiting ({snapshot.queue.length})</h2>
-          {snapshot.queue.length === 0 ? (
-            <p style={s.muted}>Nobody in line.</p>
-          ) : (
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>#</th>
-                  <th style={s.th}>Connection</th>
-                  <th style={s.th}>Client id</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.queue.map((row) => (
-                  <tr key={row.connId}>
-                    <td style={s.td}>{row.position}</td>
-                    <td style={s.tdMono}>{shortId(row.connId)}</td>
-                    <td style={s.tdMono}>{row.clientId ? shortId(row.clientId) : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-
-        <section style={s.section}>
-          <h2 style={s.h2}>Live members ({snapshot.members.length})</h2>
-          {snapshot.members.length === 0 ? (
-            <p style={s.muted}>No admitted users.</p>
-          ) : (
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>Connection</th>
-                  <th style={s.th}>Session</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Left</th>
-                  <th style={s.th} />
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.members.map((m) => (
-                  <tr key={m.connId}>
-                    <td style={s.tdMono}>{shortId(m.connId)}</td>
-                    <td style={s.tdMono}>{shortId(m.sessionId)}</td>
-                    <td style={s.td}>{m.claimed ? "active" : "grace"}</td>
-                    <td style={s.td}>{formatMs(m.msLeft)}</td>
-                    <td style={s.td}>
-                      <button
-                        type="button"
-                        style={s.btnDanger}
-                        onClick={() => admin.kickMember(m.connId)}
-                      >
-                        Kick
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
+        <Card>
+          <div style={s.bigGrid}>
+            <BigNumber
+              value={waiting}
+              label="Waiting"
+              description="Users in the queue, waiting to be admitted"
+              color="#d9b15e"
+            />
+            <BigNumber
+              value={live}
+              label="Live members"
+              description="Users past the queue — claiming or connected"
+              color="#4ade80"
+            />
+            <BigNumber
+              value={total}
+              label="Connected"
+              description="Total connected users (waiting + live)"
+              color="#60a5fa"
+            />
+            <BigNumber
+              value={snapshot.sessionCount}
+              label="Active sessions"
+              description={`Each session holds up to ${cfg.usersPerSession} user${
+                cfg.usersPerSession === 1 ? "" : "s"
+              }`}
+              color="#c084fc"
+            />
+          </div>
+        </Card>
       </div>
 
+      {/* Active Reactor sessions */}
       <section style={s.section}>
-        <h2 style={s.h2}>Reactor sessions ({snapshot.sessions.length})</h2>
+        <h2 style={s.h2}>Active Reactor sessions ({snapshot.sessions.length})</h2>
         {snapshot.sessions.length === 0 ? (
-          <p style={s.muted}>No sessions.</p>
+          <Card>
+            <p style={s.muted}>No active sessions.</p>
+          </Card>
         ) : (
-          <div style={s.sessionList}>
+          <div style={s.sessionGrid}>
             {snapshot.sessions.map((sess) => (
               <div key={sess.sessionId} style={s.sessionCard}>
                 <div style={s.rowBetween}>
                   <div>
                     <div style={s.sessionId}>{shortId(sess.sessionId)}</div>
                     <div style={s.muted}>
-                      {sess.members.length} member(s) · age {formatMs(sess.msSinceCreated)}
+                      {sess.members.length} / {cfg.usersPerSession} users · age{" "}
+                      {formatMs(sess.msSinceCreated)}
                     </div>
                   </div>
                   <button
@@ -246,42 +224,97 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
                     style={s.btnDanger}
                     onClick={() => admin.closeSession(sess.sessionId)}
                   >
-                    Force close
+                    Close session
                   </button>
                 </div>
-                <ul style={s.memberList}>
-                  {sess.members.map((connId) => (
-                    <li key={connId} style={s.tdMono}>
-                      {shortId(connId)}
-                    </li>
-                  ))}
-                </ul>
+                <div style={s.memberRows}>
+                  {sess.members.length === 0 ? (
+                    <p style={s.muted}>No members.</p>
+                  ) : (
+                    sess.members.map((connId) => {
+                      const m = memberByConn.get(connId);
+                      return (
+                        <div key={connId} style={s.memberRow}>
+                          <span style={s.mono}>{shortId(connId)}</span>
+                          <span style={s.memberMeta}>
+                            {m ? (m.claimed ? "active" : "grace") : "—"}
+                            {m ? ` · ${formatMs(m.msLeft)}` : ""}
+                          </span>
+                          <button
+                            type="button"
+                            style={s.btnDanger}
+                            onClick={() => admin.kickMember(connId)}
+                          >
+                            Evict
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             ))}
           </div>
         )}
       </section>
 
-      <p style={s.footerMuted}>
-        Snapshot at {new Date(snapshot.at).toLocaleTimeString()} · updates push over the WebSocket
-      </p>
+      {/* Queue */}
+      <section style={s.section}>
+        <h2 style={s.h2}>Queue ({snapshot.queue.length})</h2>
+        <Card>
+          {snapshot.queue.length === 0 ? (
+            <p style={s.muted}>Nobody waiting.</p>
+          ) : (
+            <div style={s.queueList}>
+              {snapshot.queue.map((row) => (
+                <div key={row.connId} style={s.queueRow}>
+                  <span style={s.queuePos}>#{row.position}</span>
+                  <span style={s.mono}>{shortId(row.connId)}</span>
+                  <span style={s.queueClient}>
+                    {row.clientId ? shortId(row.clientId) : "—"}
+                  </span>
+                  <button
+                    type="button"
+                    style={s.btnDanger}
+                    onClick={() => admin.kickQueued(row.connId)}
+                  >
+                    Evict
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </section>
     </Shell>
   );
 }
 
-function ConfigItem({
-  label,
+function BigNumber({
   value,
-  wide,
+  label,
+  description,
+  color,
 }: {
+  value: number;
   label: string;
-  value: string;
-  wide?: boolean;
+  description: string;
+  color: string;
 }) {
   return (
-    <div style={{ ...s.configItem, gridColumn: wide ? "1 / -1" : undefined }}>
-      <div style={s.configLabel}>{label}</div>
-      <div style={s.configValue}>{value}</div>
+    <div style={{ ...s.bigCard, borderColor: color }}>
+      <div style={{ ...s.bigValue, color }}>{value}</div>
+      <div style={s.bigLabel}>{label}</div>
+      <div style={s.bigDesc}>{description}</div>
+    </div>
+  );
+}
+
+function ConfigRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={s.cfgRow}>
+      <span style={s.cfgLabel}>{label}</span>
+      <span style={s.cfgValue}>{value}</span>
     </div>
   );
 }
@@ -392,62 +425,88 @@ const s: Record<string, CSSProperties> = {
     fontSize: 13,
   },
   section: { marginBottom: 28 },
-  columns: {
+  topGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-    gap: 24,
+    gridTemplateColumns: "minmax(220px, 1fr) 3fr",
+    gap: 20,
+    marginBottom: 28,
+    alignItems: "start",
   },
-  configGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+  cfgList: { display: "flex", flexDirection: "column" },
+  cfgRow: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
     gap: 12,
-  },
-  configItem: {
-    border: "1px solid #27272a",
-    borderRadius: 8,
-    padding: "10px 12px",
-    background: "rgba(24,24,27,0.35)",
-  },
-  configLabel: {
-    fontSize: 10,
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    color: "#71717a",
-  },
-  configValue: {
-    fontSize: 13,
-    color: "#e4e4e7",
-    marginTop: 4,
-    wordBreak: "break-all",
-  },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
-  th: {
-    textAlign: "left",
-    padding: "8px 10px",
-    borderBottom: "1px solid #27272a",
-    color: "#71717a",
-    fontWeight: 500,
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  td: { padding: "10px", borderBottom: "1px solid #1f1f23", color: "#d4d4d8" },
-  tdMono: {
-    padding: "10px",
+    padding: "8px 0",
     borderBottom: "1px solid #1f1f23",
-    color: "#d4d4d8",
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 12,
   },
-  sessionList: { display: "flex", flexDirection: "column", gap: 12 },
+  cfgLabel: { fontSize: 12, color: "#71717a" },
+  cfgValue: {
+    fontSize: 12,
+    color: "#e4e4e7",
+    fontFamily: "ui-monospace, monospace",
+    textAlign: "right",
+    wordBreak: "break-all",
+    maxWidth: "60%",
+  },
+  bigGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gap: 16,
+  },
+  bigCard: {
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderRadius: 12,
+    padding: 18,
+    background: "rgba(24,24,27,0.35)",
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 130,
+  },
+  bigValue: { fontSize: 44, fontWeight: 700, lineHeight: 1 },
+  bigLabel: { fontSize: 13, fontWeight: 600, color: "#e4e4e7", marginTop: 10 },
+  bigDesc: { fontSize: 11, color: "#a1a1aa", marginTop: 6, lineHeight: 1.4 },
+  mono: { fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#d4d4d8" },
+  sessionGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+    gap: 16,
+  },
   sessionCard: {
     border: "1px solid #27272a",
-    borderRadius: 10,
-    padding: 14,
-    background: "rgba(24,24,27,0.35)",
+    borderRadius: 12,
+    padding: 16,
+    background: "rgba(24,24,27,0.5)",
   },
-  sessionId: { fontFamily: "ui-monospace, monospace", fontSize: 14, color: "#d9b15e" },
-  memberList: { margin: "12px 0 0", paddingLeft: 18, color: "#a1a1aa", fontSize: 12 },
+  sessionId: { fontFamily: "ui-monospace, monospace", fontSize: 15, color: "#d9b15e" },
+  memberRows: {
+    marginTop: 14,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  memberRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "8px 10px",
+    borderRadius: 8,
+    background: "rgba(0,0,0,0.25)",
+  },
+  memberMeta: { flex: 1, fontSize: 11, color: "#a1a1aa" },
+  queueList: { display: "flex", flexDirection: "column", gap: 8 },
+  queueRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "10px 12px",
+    borderRadius: 8,
+    background: "rgba(0,0,0,0.25)",
+  },
+  queuePos: { fontSize: 14, fontWeight: 600, color: "#d9b15e", minWidth: 36 },
+  queueClient: { flex: 1, fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#71717a" },
   spinner: {
     display: "inline-block",
     width: 24,

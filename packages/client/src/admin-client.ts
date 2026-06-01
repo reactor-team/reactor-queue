@@ -105,6 +105,10 @@ export class ReactorQueueAdminClient {
     this.send({ type: "admin_kick_member", connId });
   }
 
+  kickQueued(connId: string): void {
+    this.send({ type: "admin_kick_queued", connId });
+  }
+
   closeSession(sessionId: string): void {
     this.send({ type: "admin_close_session", sessionId });
   }

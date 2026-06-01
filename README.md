@@ -346,7 +346,8 @@ admin connections are rejected.
 
 Connect with `rqAdmin=1` on the WebSocket URL, then send `{ type: "admin_auth", password }`.
 The server replies with `admin_ready` and pushes `admin_snapshot` whenever the room
-changes. Actions: `admin_kick_member`, `admin_close_session`, `admin_refresh`.
+changes. Actions: `admin_kick_member` (evict an admitted user), `admin_kick_queued`
+(drop a waiting connection), `admin_close_session`, `admin_refresh`.
 
 **React** — shell only; you build the UI:
 
@@ -362,7 +363,7 @@ import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/q
 </ReactorQueueAdminProvider>
 
 function YourDashboard() {
-  const { phase, snapshot, kickMember, closeSession } = useReactorQueueAdmin();
+  const { phase, snapshot, kickMember, kickQueued, closeSession } = useReactorQueueAdmin();
   // snapshot.config, snapshot.queue, snapshot.members, snapshot.sessions
 }
 ```

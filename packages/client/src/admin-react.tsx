@@ -21,6 +21,7 @@ export interface AdminActions {
   disconnect: () => void;
   refresh: () => void;
   kickMember: (connId: string) => void;
+  kickQueued: (connId: string) => void;
   closeSession: (sessionId: string) => void;
 }
 
@@ -64,6 +65,7 @@ export function ReactorQueueAdminProvider({
       disconnect: () => client.disconnect(),
       refresh: () => client.refresh(),
       kickMember: (connId: string) => client.kickMember(connId),
+      kickQueued: (connId: string) => client.kickQueued(connId),
       closeSession: (sessionId: string) => client.closeSession(sessionId),
     }),
     [client]
