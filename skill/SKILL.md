@@ -314,7 +314,7 @@ to reconcile state.
 
 - `packages/protocol` holds the wire types + defaults — change here first when
   adding a message; client and server both import it so they can't drift.
-- Server logic is one PartyKit `Server` class (storage: `queue`, `member:<connId>`,
+- Server logic is one PartyKit `Server` class (storage: `q:<seq>`/`qpos:<connId>`, `member:<connId>`,
   `session:<reactorSessionId>`, `cid:`/`conn:`; alarm-driven timers).
 - Build/verify: `pnpm build` (tsup, all packages), `pnpm typecheck`. Test the
   server boots with `npx partykit dev` (it auto-loads `.env`) and

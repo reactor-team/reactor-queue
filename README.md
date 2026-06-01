@@ -100,7 +100,7 @@ Terminology is **session** everywhere (no “room” or “slot” in the API):
 |---|---|
 | **Slot** | A capacity reservation (`slot:<id>` in durable storage). Holds up to `usersPerSession` members and lazily owns one Reactor session. |
 | **Member** | One admitted browser connection. Has its own grace/claim timer (`member:<connId>`). |
-| **Queue** | FIFO list of connection ids still waiting for capacity. |
+| **Queue** | Waiting connections, stored one key per waiter (`q:<seq>`) for O(1), unbounded enqueue/dequeue. |
 
 Admission **fills an open slot before opening a new one**: if any slot has
 `members.length < usersPerSession`, the head of the queue takes a seat there;
@@ -432,9 +432,14 @@ and dropping idle cost to near zero.
 
 The implementation is written for it:
 
-- **All state lives in `room.storage`** (`queue`, `member:<id>`, `slot:<id>`,
-  `cid:`/`conn:`, `admin:<id>`) — nothing important is kept in class fields, so a
-  wake/restore loses nothing.
+- **All state lives in `room.storage`** (`q:<seq>`/`qpos:<connId>`, `member:<id>`,
+  `slot:<id>`, `cid:`/`conn:`, `admin:<id>`) — nothing important is kept in class
+  fields, so a wake/restore loses nothing.
+- **The queue is stored as one key per waiter** (`q:<seq>` ordered, with a
+  `qpos:<connId>` reverse lookup), not a single array — so enqueue/dequeue are
+  O(1) and the line isn't capped by the 128 KiB single-value limit (~3k entries).
+  Position broadcasts still scan the whole line and give every waiter their exact
+  number.
 - **No application heartbeat.** Connection liveness comes from the platform
   (`onClose` + `room.getConnection`), so a hibernated room isn't woken every few
   seconds by keep-alives. The duplicate-tab guard checks for a live connection

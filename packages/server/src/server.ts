@@ -101,11 +101,52 @@ export function createReactorQueueServer(
 
     // ── storage helpers ────────────────────────────────────────────────────
 
-    private async getQueue(): Promise<string[]> {
-      return (await this.room.storage.get<string[]>("queue")) ?? [];
+    // ── queue: ordered keys, not one array ───────────────────────────────────
+    // Each waiter is its own storage entry `q:<zero-padded seq>` → connId, with a
+    // reverse lookup `qpos:<connId>` → key. This makes enqueue/dequeue/position
+    // lookups O(1) and removes the 128 KiB single-value cap, so the line can grow
+    // far past the ~3k a single JSON array allowed. `qseq` is a monotonic counter
+    // for FIFO ordering; `qcount` is the O(1) length.
+
+    private queueItemKey(seq: number): string {
+      return `q:${String(seq).padStart(16, "0")}`;
     }
-    private async setQueue(queue: string[]): Promise<void> {
-      await this.room.storage.put("queue", queue);
+    private async getQueueSeq(): Promise<number> {
+      return (await this.room.storage.get<number>("qseq")) ?? 0;
+    }
+    private async getQueueCount(): Promise<number> {
+      return (await this.room.storage.get<number>("qcount")) ?? 0;
+    }
+    private async isQueued(connId: string): Promise<boolean> {
+      return Boolean(await this.room.storage.get<string>(`qpos:${connId}`));
+    }
+    private async enqueue(connId: string): Promise<void> {
+      if (await this.isQueued(connId)) return;
+      const seq = await this.getQueueSeq();
+      const key = this.queueItemKey(seq);
+      await this.room.storage.put(key, connId);
+      await this.room.storage.put(`qpos:${connId}`, key);
+      await this.room.storage.put("qseq", seq + 1);
+      await this.room.storage.put("qcount", (await this.getQueueCount()) + 1);
+    }
+    /** Remove a waiter from the queue (by connId). Returns true if it was queued. */
+    private async dequeue(connId: string): Promise<boolean> {
+      const key = await this.room.storage.get<string>(`qpos:${connId}`);
+      if (!key) return false;
+      await this.room.storage.delete(key);
+      await this.room.storage.delete(`qpos:${connId}`);
+      await this.room.storage.put("qcount", Math.max(0, (await this.getQueueCount()) - 1));
+      return true;
+    }
+    /** Full FIFO list of waiting connIds. O(N) — used for broadcasts (no approximation). */
+    private async listQueue(): Promise<string[]> {
+      const items = await this.room.storage.list<string>({ prefix: "q:" });
+      return [...items.values()];
+    }
+    /** Front `limit` waiting entries `[key, connId]` in FIFO order, after `startAfter`. */
+    private async frontQueue(limit: number, startAfter?: string): Promise<[string, string][]> {
+      const items = await this.room.storage.list<string>({ prefix: "q:", limit, startAfter });
+      return [...items.entries()];
     }
 
     private memberKey(connId: string): string {
@@ -150,13 +191,6 @@ export function createReactorQueueServer(
       return (await this.getAllSlots()).size;
     }
 
-    /** Number of slots whose Reactor session is actually created (live GPU sessions). */
-    private async getCreatedSessionCount(): Promise<number> {
-      let n = 0;
-      for (const [, slot] of await this.getAllSlots()) if (slot.sessionId) n++;
-      return n;
-    }
-
     /** First slot with a free seat, or undefined. */
     private async findOpenSlot(): Promise<SlotRecord | undefined> {
       const cap = this.config.usersPerSession;
@@ -185,14 +219,6 @@ export function createReactorQueueServer(
       await this.room.storage.put(`conn:${connId}`, clientId);
     }
 
-    private connectionsById(connId: string): Party.Connection[] {
-      const out: Party.Connection[] = [];
-      for (const conn of this.room.getConnections()) {
-        if (conn.id === connId) out.push(conn);
-      }
-      return out;
-    }
-
     private send(conn: Party.Connection, msg: ServerMessage) {
       const ws = conn as { readyState?: number };
       if (ws.readyState !== undefined && ws.readyState !== 1 /* OPEN */) return;
@@ -202,8 +228,11 @@ export function createReactorQueueServer(
         /* connection closed between the check and the send */
       }
     }
+    // O(1) lookup via the platform connection registry (survives hibernation),
+    // instead of scanning all connections.
     private sendTo(connId: string, msg: ServerMessage) {
-      for (const conn of this.connectionsById(connId)) this.send(conn, msg);
+      const conn = this.room.getConnection(connId);
+      if (conn) this.send(conn, msg);
     }
 
     private sendAdmin(conn: Party.Connection, msg: AdminServerMessage) {
@@ -217,7 +246,8 @@ export function createReactorQueueServer(
     }
 
     private sendAdminTo(connId: string, msg: AdminServerMessage) {
-      for (const conn of this.connectionsById(connId)) this.sendAdmin(conn, msg);
+      const conn = this.room.getConnection(connId);
+      if (conn) this.sendAdmin(conn, msg);
     }
 
     private adminKey(connId: string): string {
@@ -237,7 +267,7 @@ export function createReactorQueueServer(
     private async buildSnapshot() {
       return buildAdminSnapshot({
         config: this.config,
-        queue: await this.getQueue(),
+        queue: await this.listQueue(),
         slots: await this.getAllSlots(),
         members: await this.getAllMembers(),
         resolveClientId: (connId) => this.resolveClientIdForConn(connId),
@@ -275,12 +305,10 @@ export function createReactorQueueServer(
     }
 
     private async adminKickQueued(connId: string): Promise<{ ok: boolean; message?: string }> {
-      const queue = await this.getQueue();
-      const idx = queue.indexOf(connId);
-      if (idx === -1) return { ok: false, message: "not_in_queue" };
-      queue.splice(idx, 1);
-      await this.setQueue(queue);
-      for (const conn of this.connectionsById(connId)) {
+      const removed = await this.dequeue(connId);
+      if (!removed) return { ok: false, message: "not_in_queue" };
+      const conn = this.room.getConnection(connId);
+      if (conn) {
         try {
           conn.close(1000, "evicted");
         } catch {
@@ -344,9 +372,7 @@ export function createReactorQueueServer(
           await this.setClientEntry(clientId, conn.id);
         }
 
-        const queue = await this.getQueue();
-        queue.push(conn.id);
-        await this.setQueue(queue);
+        await this.enqueue(conn.id);
         this.config.hooks.onUserConnected?.(conn.id);
         await this.tryAdmitNext();
         this.scheduleAdminBroadcast();
@@ -379,11 +405,7 @@ export function createReactorQueueServer(
           await this.room.storage.delete(`conn:${conn.id}`);
         }
 
-        const queue = await this.getQueue();
-        const idx = queue.indexOf(conn.id);
-        if (idx !== -1) {
-          queue.splice(idx, 1);
-          await this.setQueue(queue);
+        if (await this.dequeue(conn.id)) {
           this.scheduleBroadcast();
           this.scheduleAdminBroadcast();
         }
@@ -517,7 +539,7 @@ export function createReactorQueueServer(
     }
 
     async onRequest(_req: Party.Request) {
-      const queue = await this.getQueue();
+      const queueLength = await this.getQueueCount();
       const slots = await this.getAllSlots();
       const activeCount = await this.getActiveMemberCount();
       const createdSessions = [...slots].filter(([, s]) => s.sessionId).length;
@@ -533,7 +555,7 @@ export function createReactorQueueServer(
             model: c.model,
             tokenTtlSeconds: c.tokenTtlSeconds,
             pollIntervalMs: c.pollIntervalMs,
-            queueLength: queue.length,
+            queueLength,
             activeCount,
             slotCount: slots.size,
             sessionCount: createdSessions,
@@ -646,60 +668,68 @@ export function createReactorQueueServer(
     // ── admission + token minting ────────────────────────────────────────────
 
     private async tryAdmitNext() {
-      const queue = await this.getQueue();
       let queueChanged = false;
       let admittedAny = false;
+      let startAfter: string | undefined = undefined;
 
-      while (queue.length > 0) {
-        const open = await this.findOpenSlot();
-        const slotCount = await this.getSlotCount();
-        // Reserve a seat in an open slot, or open a new slot if under the cap.
-        if (!open && slotCount >= this.config.maxSessions) break;
+      // Walk the front of the queue in small FIFO batches. We only ever admit up
+      // to the (small, GPU-bounded) remaining capacity, plus we skip any dead
+      // front entries — so this touches O(admitted + stale) keys, not the whole
+      // line. `frontQueue` reads individual keys, never one giant array.
+      admit: while (true) {
+        const batch = await this.frontQueue(20, startAfter);
+        if (batch.length === 0) break;
 
-        const connId = queue[0]!;
-        if (this.connectionsById(connId).length === 0) {
-          queue.shift();
+        for (const [key, connId] of batch) {
+          startAfter = key;
+
+          const open = await this.findOpenSlot();
+          const slotCount = await this.getSlotCount();
+          // Reserve a seat in an open slot, or open a new slot if under the cap.
+          if (!open && slotCount >= this.config.maxSessions) break admit;
+
+          if (!this.room.getConnection(connId)) {
+            // Dead/stale front entry — drop it.
+            await this.dequeue(connId);
+            queueChanged = true;
+            continue;
+          }
+
+          const slot: SlotRecord = open ?? {
+            slotId: this.genId(),
+            sessionId: null,
+            members: [],
+            createdAt: Date.now(),
+          };
+          await this.setSlot({ ...slot, members: [...slot.members, connId] });
+
+          await this.dequeue(connId);
           queueChanged = true;
-          continue;
+
+          await this.setMember(connId, {
+            slotId: slot.slotId,
+            sessionId: null,
+            expiresAt: Date.now() + this.config.admissionGraceMs,
+            warned: false,
+            claimed: false,
+          });
+
+          const activeCount = await this.getActiveMemberCount();
+          this.sendTo(connId, {
+            type: "admitted",
+            active: activeCount,
+            capacity: this.config.capacity,
+            graceMs: this.config.admissionGraceMs,
+            sessionDurationMs: this.config.sessionDurationMs,
+          });
+          // Token can be minted now (it's not session-scoped); the SDK uses it
+          // after claim. getJwt/request_token keep it fresh.
+          const conn = this.room.getConnection(connId);
+          if (conn) await this.mintAndSend(conn);
+          admittedAny = true;
         }
-
-        let slot: SlotRecord;
-        if (open) {
-          slot = open;
-        } else {
-          // No Reactor session yet — created lazily on claim to avoid orphans.
-          slot = { slotId: this.genId(), sessionId: null, members: [], createdAt: Date.now() };
-        }
-
-        queue.shift();
-        queueChanged = true;
-
-        slot = { ...slot, members: [...slot.members, connId] };
-        await this.setSlot(slot);
-
-        await this.setMember(connId, {
-          slotId: slot.slotId,
-          sessionId: null,
-          expiresAt: Date.now() + this.config.admissionGraceMs,
-          warned: false,
-          claimed: false,
-        });
-
-        const activeCount = await this.getActiveMemberCount();
-        this.sendTo(connId, {
-          type: "admitted",
-          active: activeCount,
-          capacity: this.config.capacity,
-          graceMs: this.config.admissionGraceMs,
-          sessionDurationMs: this.config.sessionDurationMs,
-        });
-        // Token can be minted now (it's not session-scoped); the SDK uses it
-        // after claim. getJwt/request_token keep it fresh.
-        for (const conn of this.connectionsById(connId)) await this.mintAndSend(conn);
-        admittedAny = true;
       }
 
-      if (queueChanged) await this.setQueue(queue);
       if (admittedAny) await this.scheduleNextAlarm();
       this.scheduleBroadcast();
       if (queueChanged || admittedAny) this.scheduleAdminBroadcast();
@@ -726,10 +756,7 @@ export function createReactorQueueServer(
           });
         } catch (err) {
           this.reportError("createSession", err);
-          this.send(
-            this.connectionsById(connId)[0] ?? ({} as Party.Connection),
-            { type: "error", message: "session_create_failed" }
-          );
+          this.sendTo(connId, { type: "error", message: "session_create_failed" });
           return;
         }
         await this.setSlot({ ...slot, sessionId });
@@ -847,14 +874,17 @@ export function createReactorQueueServer(
     }
 
     private async broadcastPositions() {
-      const queue = await this.getQueue();
+      // Full FIFO scan — every waiter gets their exact position (no approximation).
+      // O(N) iteration over individual keys; each send is an O(1) connection lookup.
+      const queue = await this.listQueue();
+      const total = queue.length;
       const activeCount = await this.getActiveMemberCount();
       for (let i = 0; i < queue.length; i++) {
         const connId = queue[i]!;
         this.sendTo(connId, {
           type: "queue_position",
           position: i + 1,
-          total: queue.length,
+          total,
           active: activeCount,
           capacity: this.config.capacity,
         });
