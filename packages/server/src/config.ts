@@ -25,8 +25,6 @@ export interface ReactorQueueServerConfig {
   warningBeforeMs?: number;
   /** Requested lifetime for each minted Reactor JWT, in seconds. Env: `RQ_TOKEN_TTL_SECONDS`. */
   tokenTtlSeconds?: number;
-  /** A heartbeat older than this marks a connection dead. Env: `RQ_HEARTBEAT_STALE_MS`. */
-  heartbeatStaleMs?: number;
   /** How often to reconcile tracked sessions with Reactor, in ms. Env: `RQ_POLL_INTERVAL_MS`. */
   pollIntervalMs?: number;
 
@@ -84,7 +82,6 @@ export interface ResolvedConfig {
   admissionGraceMs: number;
   warningBeforeMs: number;
   tokenTtlSeconds: number;
-  heartbeatStaleMs: number;
   pollIntervalMs: number;
   coordinatorUrl: string;
   apiKey: string;
@@ -185,11 +182,6 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
       envNum(env, "RQ_TOKEN_TTL_SECONDS"),
       config.tokenTtlSeconds,
       DEFAULTS.tokenTtlSeconds
-    ),
-    heartbeatStaleMs: pickNum(
-      envNum(env, "RQ_HEARTBEAT_STALE_MS"),
-      config.heartbeatStaleMs,
-      DEFAULTS.heartbeatStaleMs
     ),
     pollIntervalMs: pickNum(
       envNum(env, "RQ_POLL_INTERVAL_MS"),

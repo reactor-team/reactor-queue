@@ -324,7 +324,6 @@ All values resolve as **default → `createReactorQueueServer({...})` → env va
 | `RQ_WARNING_BEFORE_MS` | `warningBeforeMs` | `30000` | Lead time for `time_warning` |
 | `RQ_TOKEN_TTL_SECONDS` | `tokenTtlSeconds` | `60` | Minted JWT lifetime |
 | `RQ_POLL_INTERVAL_MS` | `pollIntervalMs` | `15000` | Session reconciliation cadence |
-| `RQ_HEARTBEAT_STALE_MS` | `heartbeatStaleMs` | `15000` | Dead-connection threshold |
 | `RQ_COORDINATOR_URL` | `coordinatorUrl` | `https://api.reactor.inc` | Reactor API base URL |
 | `RQ_API_VERSION` | `apiVersion` | `1` | `Reactor-API-Version` header |
 | `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry |
@@ -383,7 +382,7 @@ See [`examples/basic/app/admin`](./examples/basic/app/admin) for a full dashboar
 ## Configuration (client)
 
 `ReactorQueueClientOptions` / `<ReactorQueueProvider>` props: `host` (required),
-`room`, `party`, `clientId`, `autoConnect`, `heartbeatIntervalMs`,
+`room`, `party`, `clientId`, `autoConnect`,
 `tokenSkewMs`, `tokenRequestTimeoutMs`, `retryRejectedMs`.
 
 ---
@@ -423,6 +422,31 @@ If you integrated an earlier version of this library:
 | `capacity` in wire messages | Replaces `maxConcurrent` in `admitted` / `queue_position` |
 | Hooks `onAdmit`, `onClaim`, `onExpire`, … | `onUserConnected`, `onUserEnteredSession`, `onSessionCreated`, … |
 | Server config without `model` | **`RQ_MODEL` required** (must match the model your client uses) |
+
+## Hibernation (production scaling)
+
+The PartyKit server opts into [Hibernation](https://docs.partykit.io/guides/scaling-partykit-servers-with-hibernation/)
+(`options.hibernate = true`): the platform keeps sockets open but unloads the
+server instance between messages, lifting a room from ~100 to ~32k connections
+and dropping idle cost to near zero.
+
+The implementation is written for it:
+
+- **All state lives in `room.storage`** (`queue`, `member:<id>`, `slot:<id>`,
+  `cid:`/`conn:`, `admin:<id>`) — nothing important is kept in class fields, so a
+  wake/restore loses nothing.
+- **No application heartbeat.** Connection liveness comes from the platform
+  (`onClose` + `room.getConnection`), so a hibernated room isn't woken every few
+  seconds by keep-alives. The duplicate-tab guard checks for a live connection
+  instead of a heartbeat timestamp.
+- **Broadcasts are coalesced and flushed inside the handler turn** (no in-memory
+  `setTimeout`), so a queue-position or admin update can't be dropped if the room
+  hibernates between events.
+- **Alarms are only scheduled while members/slots exist** and deleted when the
+  room empties, so an unused demo hibernates fully.
+
+Note: `partykit dev` does not hibernate — validate hibernation behavior on a
+deployed instance.
 
 ## How it improves on a hand-rolled queue
 

@@ -211,7 +211,6 @@ var** (env wins, for redeploy-free tuning). The API key MUST come from a secret.
 | `RQ_WARNING_BEFORE_MS` | `warningBeforeMs` | `30000` | lead time for `time_warning` |
 | `RQ_TOKEN_TTL_SECONDS` | `tokenTtlSeconds` | `60` | minted JWT lifetime (keep short) |
 | `RQ_POLL_INTERVAL_MS` | `pollIntervalMs` | `15000` | session reconciliation cadence |
-| `RQ_HEARTBEAT_STALE_MS` | `heartbeatStaleMs` | `15000` | dead-connection threshold |
 | `RQ_COORDINATOR_URL` | `coordinatorUrl` | `https://api.reactor.inc` | Reactor API base |
 | `RQ_API_VERSION` | `apiVersion` | `1` | `Reactor-API-Version` header |
 | `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry |
@@ -227,7 +226,7 @@ token is still valid when the user clicks Enter; both defaults satisfy this.
 ## Client config (`ReactorQueueClientOptions` / provider props)
 
 `host` (required), `room`, `party`, `clientId`, `autoConnect` (provider default
-`true`), `heartbeatIntervalMs`, `tokenSkewMs`, `tokenRequestTimeoutMs`,
+`true`), `tokenSkewMs`, `tokenRequestTimeoutMs`,
 `retryRejectedMs`.
 
 ## Migrating a non-queued Reactor app → queued
@@ -308,7 +307,7 @@ token`, the cause is usually a freed slot (footgun #1/#3), not the TTL.
 PartySocket reconnects on transient drops with a new connection id. The stable
 per-browser `clientId` (localStorage) handles duplicate-tab rejection, but a
 mid-session WS reconnect re-enters the line. Keep sessions short and the socket
-healthy (heartbeats are automatic); for long sessions, expect the server's poll
+healthy; for long sessions, expect the server's poll
 to reconcile state.
 
 ## Working on the queue packages themselves

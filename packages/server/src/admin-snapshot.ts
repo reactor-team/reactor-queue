@@ -31,7 +31,6 @@ export function configSnapshot(c: ResolvedConfig): AdminConfigSnapshot {
     admissionGraceMs: c.admissionGraceMs,
     warningBeforeMs: c.warningBeforeMs,
     tokenTtlSeconds: c.tokenTtlSeconds,
-    heartbeatStaleMs: c.heartbeatStaleMs,
     pollIntervalMs: c.pollIntervalMs,
     coordinatorUrl: c.coordinatorUrl,
     apiVersion: c.apiVersion,

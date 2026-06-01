@@ -39,10 +39,6 @@ export const DEFAULTS = {
   warningBeforeMs: 30_000,
   /** Lifetime requested for each minted Reactor JWT. Deliberately short. */
   tokenTtlSeconds: 60,
-  /** A connection whose heartbeat is older than this is considered dead. */
-  heartbeatStaleMs: 15_000,
-  /** Client heartbeat cadence. Must be < heartbeatStaleMs. */
-  heartbeatIntervalMs: 5_000,
   /**
    * How often the server re-checks tracked live sessions against the Reactor
    * API to catch sessions that ended without a clean `session_ended`/close.
@@ -147,11 +143,6 @@ export type ServerMessage =
 // Client → Server messages
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Keep-alive so the server can evict stale connections. */
-export interface HeartbeatMessage {
-  type: "heartbeat";
-}
-
 /** "I'm actually entering the demo" — upgrades the grace window to the full session. */
 export interface ClaimMessage {
   type: "claim";
@@ -173,7 +164,6 @@ export interface LeaveMessage {
 }
 
 export type ClientMessage =
-  | HeartbeatMessage
   | ClaimMessage
   | RequestTokenMessage
   | SessionEndedMessage
@@ -194,7 +184,6 @@ export interface AdminConfigSnapshot {
   admissionGraceMs: number;
   warningBeforeMs: number;
   tokenTtlSeconds: number;
-  heartbeatStaleMs: number;
   pollIntervalMs: number;
   coordinatorUrl: string;
   apiVersion: number;

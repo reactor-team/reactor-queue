@@ -54,7 +54,6 @@ export class ReactorQueueClient {
   > & { clientId: string; party?: string };
 
   private socket: PartySocket | null = null;
-  private heartbeat: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
@@ -70,7 +69,6 @@ export class ReactorQueueClient {
       party: options.party,
       clientId: options.clientId ?? persistentClientId(),
       autoConnect: options.autoConnect ?? false,
-      heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULTS.heartbeatIntervalMs,
       tokenSkewMs: options.tokenSkewMs ?? DEFAULTS.tokenSkewMs,
       tokenRequestTimeoutMs: options.tokenRequestTimeoutMs ?? 10_000,
       retryRejectedMs: options.retryRejectedMs ?? 3_000,
@@ -116,10 +114,9 @@ export class ReactorQueueClient {
     });
     this.socket = socket;
 
-    this.heartbeat = setInterval(() => {
-      this.send({ type: "heartbeat" });
-    }, this.opts.heartbeatIntervalMs);
-
+    // No app-level heartbeat: the PartyKit platform tracks connection liveness
+    // (and fires the server's onClose on disconnect) even while the room is
+    // hibernated. Heartbeats would wake the hibernated room on every tick.
     socket.addEventListener("message", (evt) => this.handleMessage(String(evt.data)));
     socket.addEventListener("close", () => this.handleClose());
   }
@@ -363,7 +360,6 @@ export class ReactorQueueClient {
   }
 
   private handleClose(): void {
-    this.stopHeartbeat();
     // Only downgrade phase if we weren't already in a terminal state.
     if (["connecting", "queued", "admitted", "starting", "active"].includes(this.state.phase)) {
       this.setState({ phase: "disconnected" });
@@ -378,15 +374,7 @@ export class ReactorQueueClient {
     }
   }
 
-  private stopHeartbeat(): void {
-    if (this.heartbeat) {
-      clearInterval(this.heartbeat);
-      this.heartbeat = null;
-    }
-  }
-
   private teardownSocket(): void {
-    this.stopHeartbeat();
     if (this.socket) {
       try {
         this.socket.close();

@@ -72,8 +72,6 @@ export interface ReactorQueueClientOptions {
   clientId?: string;
   /** Connect immediately on construction. Default false (the React provider sets this). */
   autoConnect?: boolean;
-  /** Heartbeat cadence in ms. */
-  heartbeatIntervalMs?: number;
   /** Refresh the JWT this many ms before it expires. */
   tokenSkewMs?: number;
   /** How long `getJwt()` waits for a fresh token before rejecting. */

@@ -12,6 +12,6 @@
     "RQ_TOKEN_TTL_SECONDS": "60",
     "RQ_POLL_INTERVAL_MS": "15000",
     "RQ_COORDINATOR_URL": "https://api.reactor.inc",
-    "RQ_ALLOW_DUPLICATE_CONNECTIONS": "false"
+    "RQ_ALLOW_DUPLICATE_CONNECTIONS": "true"
   }
 }

@@ -44,7 +44,6 @@ interface SlotRecord {
 /** Maps a stable browser id → its current connection, for duplicate-tab eviction. */
 interface ClientEntry {
   connId: string;
-  lastSeen: number;
 }
 
 /**
@@ -65,10 +64,10 @@ export function createReactorQueueServer(
 
     private cfg: ResolvedConfig | null = null;
     private coordinator: CoordinatorClient | null = null;
-    private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
-    private broadcastPending = false;
-    private adminBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
-    private adminBroadcastPending = false;
+    // Coalescing flags. Set during a handler, flushed once before it returns —
+    // never across the hibernation boundary, so no in-memory timer is needed.
+    private positionsDirty = false;
+    private adminDirty = false;
 
     constructor(readonly room: Party.Room) {}
 
@@ -182,7 +181,7 @@ export function createReactorQueueServer(
       return this.room.storage.get<ClientEntry>(`cid:${clientId}`);
     }
     private async setClientEntry(clientId: string, connId: string): Promise<void> {
-      await this.room.storage.put(`cid:${clientId}`, { connId, lastSeen: Date.now() });
+      await this.room.storage.put(`cid:${clientId}`, { connId });
       await this.room.storage.put(`conn:${connId}`, clientId);
     }
 
@@ -254,17 +253,9 @@ export function createReactorQueueServer(
       return out;
     }
 
+    /** Mark admin snapshots dirty; flushed once at the end of the current handler. */
     private scheduleAdminBroadcast(): void {
-      this.adminBroadcastPending = true;
-      if (this.adminBroadcastTimer) return;
-      this.adminBroadcastTimer = setTimeout(() => {
-        this.adminBroadcastTimer = null;
-        if (!this.adminBroadcastPending) return;
-        this.adminBroadcastPending = false;
-        void this.broadcastAdminSnapshots().catch((err) =>
-          this.reportError("adminBroadcast", err)
-        );
-      }, 100);
+      this.adminDirty = true;
     }
 
     private async broadcastAdminSnapshots(): Promise<void> {
@@ -338,10 +329,10 @@ export function createReactorQueueServer(
           if (!this.config.allowDuplicateConnections) {
             const entry = await this.getClientEntry(clientId);
             if (entry && entry.connId !== conn.id) {
-              const alive =
-                this.connectionsById(entry.connId).length > 0 &&
-                Date.now() - entry.lastSeen < this.config.heartbeatStaleMs;
-              if (alive) {
+              // The platform tracks connection liveness across hibernation, so
+              // a live connection for this clientId means a real duplicate tab.
+              // No app-level heartbeat needed; `onClose` cleans the mapping.
+              if (this.room.getConnection(entry.connId)) {
                 this.send(conn, { type: "rejected", reason: "already_connected" });
                 conn.close(1008, "already_connected");
                 return;
@@ -359,6 +350,7 @@ export function createReactorQueueServer(
         this.config.hooks.onUserConnected?.(conn.id);
         await this.tryAdmitNext();
         this.scheduleAdminBroadcast();
+        await this.flushBroadcasts();
       } catch (err) {
         this.reportError("onConnect", err);
         try {
@@ -403,6 +395,7 @@ export function createReactorQueueServer(
         }
 
         this.config.hooks.onUserDisconnected?.(conn.id);
+        await this.flushBroadcasts();
       } catch (err) {
         this.reportError("onClose", err);
       }
@@ -477,6 +470,7 @@ export function createReactorQueueServer(
         } catch (err) {
           this.reportError(`onMessage:admin:${adminMsg?.type ?? "unknown"}`, err);
         }
+        await this.flushBroadcasts();
         return;
       }
 
@@ -485,20 +479,6 @@ export function createReactorQueueServer(
 
       try {
         switch (msg.type) {
-          case "heartbeat": {
-            const clientId = await this.room.storage.get<string>(`conn:${sender.id}`);
-            if (clientId) {
-              const entry = await this.getClientEntry(clientId);
-              if (entry?.connId === sender.id) {
-                await this.room.storage.put(`cid:${clientId}`, {
-                  ...entry,
-                  lastSeen: Date.now(),
-                });
-              }
-            }
-            break;
-          }
-
           case "claim": {
             const member = await this.getMember(sender.id);
             if (member && !member.claimed) {
@@ -533,6 +513,7 @@ export function createReactorQueueServer(
       } catch (err) {
         this.reportError(`onMessage:${msg.type}`, err);
       }
+      await this.flushBroadcasts();
     }
 
     async onRequest(_req: Party.Request) {
@@ -622,8 +603,10 @@ export function createReactorQueueServer(
         }
 
         if (freedAny) await this.tryAdmitNext();
-        await this.broadcastPositions();
+        // Always refresh countdowns for waiting clients and admin dashboards.
+        this.scheduleBroadcast();
         this.scheduleAdminBroadcast();
+        await this.flushBroadcasts();
       } catch (err) {
         this.reportError("onAlarm", err);
       } finally {
@@ -831,17 +814,36 @@ export function createReactorQueueServer(
       this.scheduleAdminBroadcast();
     }
 
-    // ── position broadcasting (coalesced) ─────────────────────────────────────
+    // ── broadcasting (coalesced, hibernation-safe) ────────────────────────────
 
+    /** Mark queue positions dirty; flushed once at the end of the current handler. */
     private scheduleBroadcast(): void {
-      this.broadcastPending = true;
-      if (this.broadcastTimer) return;
-      this.broadcastTimer = setTimeout(() => {
-        this.broadcastTimer = null;
-        if (!this.broadcastPending) return;
-        this.broadcastPending = false;
-        void this.broadcastPositions().catch((err) => this.reportError("broadcast", err));
-      }, 100);
+      this.positionsDirty = true;
+    }
+
+    /**
+     * Flush any pending broadcasts. Called at the end of every top-level handler
+     * (onConnect/onClose/onMessage/onAlarm) so the work completes inside the
+     * awaited handler turn — before PartyKit can hibernate the room. Multiple
+     * `schedule*` calls within one handler collapse into a single broadcast.
+     */
+    private async flushBroadcasts(): Promise<void> {
+      if (this.positionsDirty) {
+        this.positionsDirty = false;
+        try {
+          await this.broadcastPositions();
+        } catch (err) {
+          this.reportError("broadcast", err);
+        }
+      }
+      if (this.adminDirty) {
+        this.adminDirty = false;
+        try {
+          await this.broadcastAdminSnapshots();
+        } catch (err) {
+          this.reportError("adminBroadcast", err);
+        }
+      }
     }
 
     private async broadcastPositions() {
