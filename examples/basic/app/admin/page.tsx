@@ -166,7 +166,7 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
             <ConfigRow label="Session source" value={cfg.sessionSource === "custom" ? "custom" : "create/stop"} />
             <ConfigRow label="WebRTC" value={cfg.webrtcVersion} />
             <ConfigRow label="API version" value={String(cfg.apiVersion)} />
-            <ConfigRow label="Coordinator" value={cfg.coordinatorUrl} />
+            <ConfigRow label="Coordinator" value={cfg.coordinatorUrl} stacked />
           </div>
         </Card>
 
@@ -325,11 +325,31 @@ function BigNumber({
   );
 }
 
-function ConfigRow({ label, value }: { label: string; value: string }) {
+function ConfigRow({
+  label,
+  value,
+  stacked,
+}: {
+  label: string;
+  value: string;
+  stacked?: boolean;
+}) {
+  if (stacked) {
+    return (
+      <div style={s.cfgRowStacked}>
+        <span style={s.cfgLabel}>{label}</span>
+        <span style={s.cfgValueStacked} title={value}>
+          {value}
+        </span>
+      </div>
+    );
+  }
   return (
     <div style={s.cfgRow}>
       <span style={s.cfgLabel}>{label}</span>
-      <span style={s.cfgValue}>{value}</span>
+      <span style={s.cfgValue} title={value}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -456,14 +476,29 @@ const s: Record<string, CSSProperties> = {
     padding: "8px 0",
     borderBottom: "1px solid #1f1f23",
   },
+  cfgRowStacked: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    padding: "8px 0",
+    borderBottom: "1px solid #1f1f23",
+  },
   cfgLabel: { fontSize: 12, color: "#71717a" },
   cfgValue: {
     fontSize: 12,
     color: "#e4e4e7",
     fontFamily: "ui-monospace, monospace",
     textAlign: "right",
-    wordBreak: "break-all",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
     maxWidth: "60%",
+  },
+  cfgValueStacked: {
+    fontSize: 12,
+    color: "#e4e4e7",
+    fontFamily: "ui-monospace, monospace",
+    wordBreak: "break-all",
   },
   bigGrid: {
     display: "grid",
