@@ -331,7 +331,7 @@ All values resolve as **default → `createReactorQueueServer({...})` → env va
 | `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false` | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`) |
 
 `acquireSession` / `releaseSession` are code-only overrides (functions, not env) —
-see [Overriding session lifecycle](#overriding-session-lifecycle-eg-a-robot-already-in-the-room).
+see [Overriding session lifecycle](#overriding-session-lifecycle).
 
 `createReactorQueueServer` also accepts optional **hooks** (not env-configurable):
 
@@ -382,19 +382,25 @@ function YourDashboard() {
 
 See [`examples/basic/app/admin`](./examples/basic/app/admin) for a full dashboard.
 
-## Overriding session lifecycle (e.g. a robot already in the room)
+## Overriding session lifecycle
 
 How a session is obtained on `claim()` and what happens when a user leaves are
 two **overridable callbacks**. By default they create and delete sessions via the
-Reactor API; override either to plug in your own behavior — for example a
-pre-provisioned session that already has a backend agent ("robot") connected.
+Reactor API; override either to plug in your own behavior.
+
+You'd reach for this when the queue shouldn't own the session — for example when
+sessions come from **another service** that pre-provisions them, or when each
+session already has a **different kind of client attached** before the queued
+user arrives (a non-interactive participant, an agent/bot, a teleoperated peer).
+In those cases `acquire` leases an existing session id instead of creating one,
+and `release` tells the owning service that the user left rather than deleting.
 
 ```ts
 createReactorQueueServer({
   model: "helios",
 
   // Get a session id when a user claims. Called once per session (first member).
-  // Default: POST /sessions. Override to lease a ready, robot-backed session.
+  // Default: POST /sessions. Override to lease one from an external service.
   acquireSession: async ({ model }) => {
     const r = await fetch(`${POOL}/lease`, { method: "POST", headers, body: JSON.stringify({ model }) });
     return (await r.json()).session_id;        // throw if none available → client gets `error`, retries
@@ -402,7 +408,7 @@ createReactorQueueServer({
 
   // A user LEFT the session (not necessarily "delete it"). You get who left and
   // whether they were the last one. Default: delete via DELETE /sessions on the
-  // last member. Override to keep the session and just react (e.g. reset a robot).
+  // last member. Override to keep the session and just react (e.g. hand it back).
   releaseSession: async ({ sessionId, userId, reason, lastMember }) => {
     await fetch(`${POOL}/left`, { method: "POST", headers,
       body: JSON.stringify({ session_id: sessionId, user_id: userId, reason, last_member: lastMember }) });
@@ -414,12 +420,13 @@ createReactorQueueServer({
   so an abandoned admission never acquires anything.
 - `releaseSession` runs each time a member leaves (timeout, disconnect, end, kick),
   with `userId` (the connection that left) and `lastMember`. Use `lastMember` to
-  decide whether to tear the session down or leave it for the others / the robot.
+  decide whether to tear the session down or leave it running for any remaining
+  participants.
 
-The human still attaches with `connect({ sessionId })` and the queue still mints
-the JWT, so a custom-acquired session **must belong to the same Reactor account as
-the queue's API key**, and (for the robot+human case) the platform must allow two
-connections in one session.
+The queued user still attaches with `connect({ sessionId })` and the queue still
+mints the JWT, so a custom-acquired session **must belong to the same Reactor
+account as the queue's API key**. If another client is meant to share the session
+with the queued user, the platform must allow more than one connection per session.
 
 ## Configuration (client)
 

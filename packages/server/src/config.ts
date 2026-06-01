@@ -82,10 +82,11 @@ export interface ReactorQueueServerConfig {
 
   /**
    * Override how a session id is obtained when an admitted user `claim()`s.
-   * Default: create one via the Reactor API (`POST /sessions`). Override to,
-   * e.g., lease a pre-provisioned session that already has a backend agent
-   * ("robot") connected. Called once per session (the first member's claim).
-   * Not configurable via env — pass a function.
+   * Default: create one via the Reactor API (`POST /sessions`). Override to
+   * source sessions from elsewhere — e.g. lease a pre-provisioned session from
+   * another service that already has a different kind of client attached.
+   * Called once per session (the first member's claim). Not configurable via
+   * env — pass a function.
    */
   acquireSession?: AcquireSessionFn;
 
@@ -94,8 +95,9 @@ export interface ReactorQueueServerConfig {
    * with their `userId` and whether they were the `lastMember`. Default: when
    * the last member leaves, delete the session via the Reactor API
    * (`DELETE /sessions/{id}`, subject to `stopSessionsOnExpiry`). Override to
-   * keep the session alive and just react to the departure (e.g. reset a robot).
-   * Not configurable via env — pass a function.
+   * keep the session alive and just react to the departure (e.g. hand it back to
+   * the owning service to be reset and reused). Not configurable via env — pass
+   * a function.
    */
   releaseSession?: ReleaseSessionFn;
 
