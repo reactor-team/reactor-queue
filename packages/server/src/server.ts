@@ -26,6 +26,8 @@ interface MemberData {
   expiresAt: number;
   warned: boolean;
   claimed: boolean;
+  /** True while a claim is mid-flight (session being acquired) to reject duplicates. */
+  claiming?: boolean;
 }
 
 /**
@@ -540,7 +542,7 @@ export function createReactorQueueServer(
         switch (msg.type) {
           case "claim": {
             const member = await this.getMember(sender.id);
-            if (member && !member.claimed) {
+            if (member && !member.claimed && !member.claiming) {
               await this.claimMember(sender.id, member);
             }
             break;
@@ -773,9 +775,18 @@ export function createReactorQueueServer(
      * session timer, and hand back the session id to attach to.
      */
     private async claimMember(connId: string, member: MemberData): Promise<void> {
+      // Mark mid-claim *before* the first yield. `acquireSession` can be a slow
+      // network call and the DO input gate is open across non-storage awaits, so
+      // a duplicate `claim` could otherwise slip past the `!claimed` guard and
+      // acquire a second session. This persisted flag closes that window; it is
+      // cleared on completion or failure (and a stuck flag self-heals on grace
+      // expiry, which still releases the member).
+      await this.setMember(connId, { ...member, claiming: true });
+
       const slot = await this.getSlot(member.slotId);
       if (!slot) {
         // Slot vanished (e.g. reaped); nothing to claim.
+        await this.setMember(connId, { ...member, claiming: false });
         return;
       }
 
@@ -785,6 +796,7 @@ export function createReactorQueueServer(
           sessionId = await this.runAcquire(this.config.model);
         } catch (err) {
           this.reportError("acquireSession", err);
+          await this.setMember(connId, { ...member, claiming: false });
           this.sendTo(connId, { type: "error", message: "session_create_failed" });
           return;
         }
@@ -799,6 +811,7 @@ export function createReactorQueueServer(
         expiresAt,
         warned: false,
         claimed: true,
+        claiming: false,
       });
 
       this.sendTo(connId, {
