@@ -11,7 +11,7 @@ pnpm add @reactor-team/queue-server partykit
 ```ts
 // partykit/server.ts
 import { createReactorQueueServer } from "@reactor-team/queue-server";
-export default createReactorQueueServer({ maxConcurrent: 3 });
+export default createReactorQueueServer({ model: "helios", maxSessions: 3 });
 ```
 
 Set the `RQ_REACTOR_API_KEY` secret. See the

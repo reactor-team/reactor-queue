@@ -18,7 +18,6 @@ export interface QueueActions {
   leave: () => void;
   rejoin: () => void;
   claim: () => void;
-  reportSession: (sessionId: string) => void;
   endSession: () => void;
   /** Resolver to pass straight into the Reactor SDK's `getJwt` prop. */
   getJwt: () => Promise<string>;
@@ -69,7 +68,6 @@ export function ReactorQueueProvider({ children, ...options }: ReactorQueueProvi
       leave: () => client.leave(),
       rejoin: () => client.rejoin(),
       claim: () => client.claim(),
-      reportSession: (sessionId: string) => client.reportSession(sessionId),
       endSession: () => client.endSession(),
       getJwt: client.getJwt,
     }),

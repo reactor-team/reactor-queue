@@ -45,8 +45,8 @@ interface PendingTokenRequest {
  * fresh short-lived Reactor JWT to the Reactor SDK on demand.
  *
  * It is intentionally decoupled from `@reactor-team/js-sdk`: you wire the two
- * together by passing `getJwt` to the SDK and calling {@link reportSession} when
- * the SDK reports a session id.
+ * together by passing `getJwt` to the SDK and `connectOptions.sessionId` from
+ * {@link ReactorQueueClient.getState}'s `sessionId` (set on admission).
  */
 export class ReactorQueueClient {
   private readonly opts: Required<
@@ -105,7 +105,7 @@ export class ReactorQueueClient {
       ...INITIAL_STATE,
       phase: "connecting",
       // keep concurrency hints across reconnects so the UI doesn't flicker to 0
-      maxConcurrent: this.state.maxConcurrent,
+      capacity: this.state.capacity,
     });
 
     const socket = new PartySocket({
@@ -154,13 +154,6 @@ export class ReactorQueueClient {
         : this.state.sessionEndsAt;
       this.setState({ phase: "active", sessionEndsAt, secondsLeft: null });
     }
-  }
-
-  /** Tell the server which Reactor session id this slot is driving. */
-  reportSession(sessionId: string): void {
-    if (!sessionId || sessionId === this.state.sessionId) return;
-    this.setState({ sessionId, phase: this.state.phase === "admitted" ? "active" : this.state.phase });
-    this.send({ type: "session_started", sessionId });
   }
 
   /** The Reactor session ended client-side; free the slot so the queue slides. */
@@ -305,7 +298,7 @@ export class ReactorQueueClient {
           position: msg.position,
           total: msg.total,
           active: msg.active,
-          maxConcurrent: msg.maxConcurrent,
+          capacity: msg.capacity,
         });
         break;
 
@@ -315,7 +308,8 @@ export class ReactorQueueClient {
           position: 0,
           total: 0,
           active: msg.active,
-          maxConcurrent: msg.maxConcurrent,
+          capacity: msg.capacity,
+          sessionId: msg.sessionId,
           sessionEndsAt: Date.now() + msg.graceMs,
           sessionDurationMs: msg.sessionDurationMs,
           secondsLeft: null,

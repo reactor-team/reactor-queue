@@ -21,8 +21,10 @@ export const CLIENT_ID_QUERY_KEY = "rqClientId";
  * environment variables (see `@reactor-team/queue-server`).
  */
 export const DEFAULTS = {
-  /** How many users may hold a live Reactor session at once. */
-  maxConcurrent: 1,
+  /** Max concurrent Reactor sessions (GPU ceiling). */
+  maxSessions: 1,
+  /** Members per session (default 1 = today's behavior; >1 when platform allows N). */
+  usersPerSession: 1,
   /** Full session budget once a user has `claim()`ed their slot. */
   sessionDurationMs: 120_000,
   /**
@@ -60,7 +62,7 @@ export interface QueuePositionMessage {
   position: number;
   total: number;
   active: number;
-  maxConcurrent: number;
+  capacity: number;
 }
 
 /**
@@ -71,11 +73,14 @@ export interface QueuePositionMessage {
 export interface AdmittedMessage {
   type: "admitted";
   active: number;
-  maxConcurrent: number;
+  /** Total live users = activeSessions * usersPerSession. */
+  capacity: number;
   /** ms the client has to `claim()` before the slot is reclaimed. */
   graceMs: number;
   /** Full session budget (ms) the client receives once it `claim()`s. For countdown UI. */
   sessionDurationMs: number;
+  /** Reactor session id created by the server — attach with connect({ sessionId }). */
+  sessionId: string;
 }
 
 /** A freshly minted, short-lived Reactor JWT. Sent on admission and on each `request_token`. */
@@ -140,15 +145,6 @@ export interface RequestTokenMessage {
   type: "request_token";
 }
 
-/**
- * Tell the server which Reactor session id this slot is now driving. Lets the
- * server stop the session on expiry and poll it for early drop-out.
- */
-export interface SessionStartedMessage {
-  type: "session_started";
-  sessionId: string;
-}
-
 /** The user ended the Reactor session from the client; free the slot now. */
 export interface SessionEndedMessage {
   type: "session_ended";
@@ -163,7 +159,6 @@ export type ClientMessage =
   | HeartbeatMessage
   | ClaimMessage
   | RequestTokenMessage
-  | SessionStartedMessage
   | SessionEndedMessage
   | LeaveMessage;
 

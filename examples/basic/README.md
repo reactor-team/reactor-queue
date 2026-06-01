@@ -6,8 +6,9 @@ Next.js app + one PartyKit room.
 
 It shows every queue phase — line position, the "you're up" admission countdown,
 the live session with a time-left clock, expiry, and a rejoin prompt — plus the
-two integration points: `getJwt={queue.getJwt}` and a `SessionBridge` that
-reports the SDK session id back to the queue.
+two integration points: `getJwt={queue.getJwt}` and
+`connectOptions={{ sessionId: queue.sessionId }}` so the SDK attaches to the
+server-created session (no `reportSession`).
 
 There is **no model-control UI**: as soon as the session is ready the page
 auto-sends one prompt (the glowing words "REACTOR QUEUE") and starts generating,
@@ -16,6 +17,10 @@ a queue doesn't change how you drive the model; swap `HeliosProvider` for any
 typed SDK (or the base `Reactor`) and your existing controls work unchanged.
 
 ## Run it
+
+The example pins `@reactor-team/js-sdk` via a root `pnpm.overrides` link to
+`../js-sdk` so `connectOptions.sessionId` type-checks before that API ships on
+npm (js-sdk PR #189). Remove the override once a release includes it.
 
 From the **repo root** (build the workspace packages first):
 
@@ -42,14 +47,14 @@ from .env`) and exposes `RQ_REACTOR_API_KEY` on `room.env`.
 
 Open http://localhost:3000. You'll see your queue position; click **Enter the
 demo** when you reach the front. Open a second browser to watch the line form
-(keep `RQ_MAX_CONCURRENT=1` in `partykit.json`).
+(keep `RQ_MAX_SESSIONS=1` in `partykit.json`).
 
 ## What to look at
 
 - `app/page.tsx` — the entire example: `<ReactorQueueProvider>`, a phase switch,
   the gated `<ReactorProvider getJwt={queue.getJwt}>`, and `SessionBridge`.
 - `partykit/server.ts` — `createReactorQueueServer()`, the whole queue.
-- `partykit.json` — tunables (`RQ_MAX_CONCURRENT`, `RQ_SESSION_DURATION_MS`, …).
+- `partykit.json` — tunables (`RQ_MODEL`, `RQ_MAX_SESSIONS`, `RQ_USERS_PER_SESSION`, …).
 
 ## Deploy
 
