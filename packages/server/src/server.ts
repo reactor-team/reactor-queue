@@ -14,6 +14,7 @@ import {
   type ResolvedConfig,
 } from "./config";
 import { CoordinatorClient } from "./coordinator";
+import { HttpSessionPool, type SessionSource } from "./session-source";
 
 /** Per admitted member. Lives in durable storage under `member:<connId>`. */
 interface MemberData {
@@ -64,6 +65,7 @@ export function createReactorQueueServer(
 
     private cfg: ResolvedConfig | null = null;
     private coordinator: CoordinatorClient | null = null;
+    private sessionSrcResolved: SessionSource | null | undefined = undefined;
     // Coalescing flags. Set during a handler, flushed once before it returns —
     // never across the hibernation boundary, so no in-memory timer is needed.
     private positionsDirty = false;
@@ -88,6 +90,27 @@ export function createReactorQueueServer(
         });
       }
       return this.coordinator;
+    }
+
+    /**
+     * The session source: a code-provided pool, else the HTTP pool from
+     * `RQ_SESSION_POOL_URL`, else `null` (meaning "create/stop via Coordinator").
+     */
+    private get sessionSource(): SessionSource | null {
+      if (this.sessionSrcResolved === undefined) {
+        const c = this.config;
+        if (c.sessionSource) {
+          this.sessionSrcResolved = c.sessionSource;
+        } else if (c.sessionPoolUrl) {
+          this.sessionSrcResolved = new HttpSessionPool({
+            url: c.sessionPoolUrl,
+            token: c.sessionPoolToken,
+          });
+        } else {
+          this.sessionSrcResolved = null;
+        }
+      }
+      return this.sessionSrcResolved;
     }
 
     private reportError(where: string, error: unknown) {
@@ -749,13 +772,18 @@ export function createReactorQueueServer(
 
       let sessionId = slot.sessionId;
       if (!sessionId) {
+        const source = this.sessionSource;
         try {
-          sessionId = await this.api.createSession({
-            model: this.config.model,
-            webrtcVersion: this.config.webrtcVersion,
-          });
+          // Lease from a pre-provisioned pool (robot already in the session), or
+          // create a fresh session if no pool is configured.
+          sessionId = source
+            ? await source.acquire({ model: this.config.model })
+            : await this.api.createSession({
+                model: this.config.model,
+                webrtcVersion: this.config.webrtcVersion,
+              });
         } catch (err) {
-          this.reportError("createSession", err);
+          this.reportError(source ? "sessionSource.acquire" : "createSession", err);
           this.sendTo(connId, { type: "error", message: "session_create_failed" });
           return;
         }
@@ -829,11 +857,24 @@ export function createReactorQueueServer(
     private async closeSlot(slotId: string, reason: string, stop: boolean): Promise<void> {
       const slot = await this.getSlot(slotId);
       const sessionId = slot?.sessionId ?? null;
-      if (stop && sessionId) {
-        try {
-          await this.api.stopSession(sessionId, `queue: ${reason}`);
-        } catch (err) {
-          this.reportError("stopSession", err);
+      if (sessionId) {
+        const source = this.sessionSource;
+        if (source) {
+          // Pooled: always hand the session back so the pool can recycle it
+          // (e.g. reset and re-attach a robot) — `stop` doesn't apply.
+          try {
+            await source.release(sessionId, reason);
+          } catch (err) {
+            this.reportError("sessionSource.release", err);
+          }
+        } else if (stop) {
+          // `stop` already folds in `stopSessionsOnExpiry` at the call site;
+          // admin force-close passes stop=true to override it.
+          try {
+            await this.api.stopSession(sessionId, `queue: ${reason}`);
+          } catch (err) {
+            this.reportError("stopSession", err);
+          }
         }
       }
       await this.deleteSlot(slotId);

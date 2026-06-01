@@ -36,6 +36,7 @@ export function configSnapshot(c: ResolvedConfig): AdminConfigSnapshot {
     apiVersion: c.apiVersion,
     stopSessionsOnExpiry: c.stopSessionsOnExpiry,
     allowDuplicateConnections: c.allowDuplicateConnections,
+    sessionSource: c.sessionSource || c.sessionPoolUrl ? "pool" : "create",
   };
 }
 

@@ -329,6 +329,8 @@ All values resolve as **default → `createReactorQueueServer({...})` → env va
 | `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry |
 | `RQ_ADMIN_PASSWORD` | `adminPassword` | — (off) | Password for admin dashboard connections |
 | `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false` | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`) |
+| `RQ_SESSION_POOL_URL` | `sessionPoolUrl` | — (off) | Lease sessions from an HTTP pool instead of creating them (see Session pools) |
+| `RQ_SESSION_POOL_TOKEN` | `sessionPoolToken` | — | Bearer token for the session pool |
 
 `createReactorQueueServer` also accepts optional **hooks** (not env-configurable):
 
@@ -378,6 +380,42 @@ function YourDashboard() {
 **Vanilla** — `@reactor-team/queue/admin` exports `ReactorQueueAdminClient`.
 
 See [`examples/basic/app/admin`](./examples/basic/app/admin) for a full dashboard.
+
+## Session pools (a robot already in the room)
+
+By default the queue **creates** a Reactor session on `claim()` and **stops** it
+on teardown. For setups where each session should already contain a backend
+agent (a "robot" connected via the Python SDK) before the human arrives, swap
+session creation for **leasing from a pre-provisioned pool** via a `SessionSource`:
+
+```ts
+interface SessionSource {
+  acquire(ctx: { model: string }): Promise<string>;      // a ready session id (robot already in it)
+  release(sessionId: string, reason: string): Promise<void>; // hand it back / recycle
+}
+```
+
+`acquire` is called once per slot on the first `claim()` (never during grace, so
+an abandoned admission never leases); `release` runs when the slot empties. The
+human still attaches with `connect({ sessionId })` and the queue still mints the
+JWT, so **leased sessions must belong to the same Reactor account as the queue's
+API key**, and the platform must allow the robot + human as two connections in
+one session.
+
+Two ways to configure it:
+
+```ts
+// 1. Your own implementation (code):
+createReactorQueueServer({ model: "helios", sessionSource: myPool });
+
+// 2. The built-in HTTP pool (env): set RQ_SESSION_POOL_URL (+ RQ_SESSION_POOL_TOKEN).
+//    Your service implements:
+//      POST {url}/lease   { model }            -> { session_id }   (non-2xx = pool empty)
+//      POST {url}/release { session_id, reason }
+```
+
+If `acquire` throws (pool empty), the client gets an `error` and can retry —
+same path as a session-create failure.
 
 ## Configuration (client)
 

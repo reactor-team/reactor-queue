@@ -1,4 +1,5 @@
 import { DEFAULTS, DEFAULT_ROOM } from "@reactor-team/queue-protocol";
+import type { SessionSource } from "./session-source";
 
 /**
  * Operator-facing configuration for the queue server.
@@ -59,6 +60,24 @@ export interface ReactorQueueServerConfig {
    */
   allowDuplicateConnections?: boolean;
 
+  /**
+   * Lease sessions from a pre-provisioned pool instead of creating them.
+   * When set, `claim()` calls `acquire()` and teardown calls `release()` instead
+   * of `POST`/`DELETE /sessions`. Use for "robot already in the room" setups.
+   * Not configurable via env (pass an implementation); for the built-in HTTP
+   * pool, set `RQ_SESSION_POOL_URL` instead. Code config wins over env.
+   */
+  sessionSource?: SessionSource;
+
+  /**
+   * URL of an HTTP session pool. When set (and no `sessionSource` is passed in
+   * code), the server leases sessions from it via {@link HttpSessionPool}.
+   * Env: `RQ_SESSION_POOL_URL`. Auth: `RQ_SESSION_POOL_TOKEN` (Bearer).
+   */
+  sessionPoolUrl?: string;
+  /** Bearer token for the HTTP session pool. Env: `RQ_SESSION_POOL_TOKEN`. */
+  sessionPoolToken?: string;
+
   /** Optional lifecycle hooks for logging / metrics. Not configurable via env. */
   hooks?: ReactorQueueServerHooks;
 }
@@ -94,6 +113,12 @@ export interface ResolvedConfig {
   adminPassword: string | null;
   /** When true, the duplicate-tab (same `clientId`) rejection is disabled. */
   allowDuplicateConnections: boolean;
+  /** Code-provided session source (wins over the HTTP pool), or null. */
+  sessionSource: SessionSource | null;
+  /** HTTP session pool URL (used when no code `sessionSource`), or null. */
+  sessionPoolUrl: string | null;
+  /** Bearer token for the HTTP session pool, or null. */
+  sessionPoolToken: string | null;
 }
 
 const DEFAULT_COORDINATOR_URL = "https://api.reactor.inc";
@@ -204,6 +229,9 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
       envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ??
       config.allowDuplicateConnections ??
       false,
+    sessionSource: config.sessionSource ?? null,
+    sessionPoolUrl: envStr(env, "RQ_SESSION_POOL_URL") ?? config.sessionPoolUrl ?? null,
+    sessionPoolToken: envStr(env, "RQ_SESSION_POOL_TOKEN") ?? config.sessionPoolToken ?? null,
   };
 }
 
