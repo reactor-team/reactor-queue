@@ -9,8 +9,14 @@ import { DEFAULTS, DEFAULT_ROOM } from "@reactor-team/queue-protocol";
  * code and still tune a deployment without a redeploy.
  */
 export interface ReactorQueueServerConfig {
-  /** Max users holding a live Reactor session at once. Env: `RQ_MAX_CONCURRENT`. */
-  maxConcurrent?: number;
+  /** Max concurrent Reactor sessions (GPU ceiling). Env: `RQ_MAX_SESSIONS`. */
+  maxSessions?: number;
+  /** Members per session. Env: `RQ_USERS_PER_SESSION`. */
+  usersPerSession?: number;
+  /** Model name for `POST /sessions`. Env: `RQ_MODEL`. Required. */
+  model?: string;
+  /** WebRTC transport version for session create. Env: `RQ_WEBRTC_VERSION`. */
+  webrtcVersion?: string;
   /** Full session budget after claim, in ms. Env: `RQ_SESSION_DURATION_MS`. */
   sessionDurationMs?: number;
   /** Grace window to claim an admitted slot, in ms. Env: `RQ_ADMISSION_GRACE_MS`. */
@@ -47,16 +53,20 @@ export interface ReactorQueueServerConfig {
 }
 
 export interface ReactorQueueServerHooks {
-  onAdmit?: (connId: string) => void;
-  onClaim?: (connId: string) => void;
-  onExpire?: (connId: string, sessionId: string | undefined, reason: string) => void;
-  onSessionReaped?: (connId: string, sessionId: string, state: string) => void;
+  onUserConnected?: (connId: string) => void;
+  onUserDisconnected?: (connId: string) => void;
+  onUserEnteredSession?: (connId: string, sessionId: string) => void;
+  onSessionCreated?: (sessionId: string) => void;
+  onSessionClosed?: (sessionId: string, reason: string) => void;
   onError?: (where: string, error: unknown) => void;
 }
 
 /** Fully-resolved config with all values present. */
 export interface ResolvedConfig {
-  maxConcurrent: number;
+  maxSessions: number;
+  usersPerSession: number;
+  model: string;
+  webrtcVersion: string;
   sessionDurationMs: number;
   admissionGraceMs: number;
   warningBeforeMs: number;
@@ -68,9 +78,12 @@ export interface ResolvedConfig {
   apiVersion: number;
   stopSessionsOnExpiry: boolean;
   hooks: ReactorQueueServerHooks;
+  /** Total live users = maxSessions * usersPerSession. */
+  capacity: number;
 }
 
 const DEFAULT_COORDINATOR_URL = "https://api.reactor.inc";
+const DEFAULT_WEBRTC_VERSION = "1.0";
 
 type Env = Record<string, unknown>;
 
@@ -102,8 +115,7 @@ function pickNum(envVal: number | undefined, cfgVal: number | undefined, def: nu
 
 /**
  * Merge built-in defaults, factory config, and `room.env` into a single
- * resolved config object. Throws if the API key is missing, since the server
- * cannot mint tokens without it.
+ * resolved config object. Throws if the API key or model is missing.
  */
 export function resolveConfig(config: ReactorQueueServerConfig, env: Env): ResolvedConfig {
   const apiKey = envStr(env, "RQ_REACTOR_API_KEY") ?? config.apiKey;
@@ -114,12 +126,29 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     );
   }
 
+  const model = envStr(env, "RQ_MODEL") ?? config.model;
+  if (!model) {
+    throw new Error(
+      "[reactor-queue] No model configured. Set RQ_MODEL (e.g. helios) or pass `model` to createReactorQueueServer()."
+    );
+  }
+
+  const maxSessions = pickNum(
+    envNum(env, "RQ_MAX_SESSIONS"),
+    config.maxSessions,
+    DEFAULTS.maxSessions
+  );
+  const usersPerSession = pickNum(
+    envNum(env, "RQ_USERS_PER_SESSION"),
+    config.usersPerSession,
+    DEFAULTS.usersPerSession
+  );
+
   return {
-    maxConcurrent: pickNum(
-      envNum(env, "RQ_MAX_CONCURRENT"),
-      config.maxConcurrent,
-      DEFAULTS.maxConcurrent
-    ),
+    maxSessions,
+    usersPerSession,
+    model,
+    webrtcVersion: envStr(env, "RQ_WEBRTC_VERSION") ?? config.webrtcVersion ?? DEFAULT_WEBRTC_VERSION,
     sessionDurationMs: pickNum(
       envNum(env, "RQ_SESSION_DURATION_MS"),
       config.sessionDurationMs,
@@ -160,6 +189,7 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     stopSessionsOnExpiry:
       envBool(env, "RQ_STOP_SESSIONS") ?? config.stopSessionsOnExpiry ?? true,
     hooks: config.hooks ?? {},
+    capacity: maxSessions * usersPerSession,
   };
 }
 

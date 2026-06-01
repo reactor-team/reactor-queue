@@ -11,17 +11,20 @@ import {
 } from "./config";
 import { CoordinatorClient } from "./coordinator";
 
-/** One admitted slot. Lives in durable storage under `session:<connId>`. */
-interface SessionData {
-  /** Epoch ms when this slot is reclaimed (grace deadline, or full-session deadline once claimed). */
+/** Per admitted member. Lives in durable storage under `member:<connId>`. */
+interface MemberData {
+  sessionId: string;
+  /** Epoch ms when this member's slot is reclaimed (grace or full session). */
   expiresAt: number;
-  /** Whether the pre-expiry `time_warning` has already been sent. */
   warned: boolean;
-  /** False = holding a grace slot; true = user entered and has the full budget. */
   claimed: boolean;
-  /** Reactor session id once the client reports it. Enables stop + poll. */
-  sessionId?: string;
-  /** Epoch ms of the last reconciliation poll against Reactor. */
+}
+
+/** One Reactor session shared by up to `usersPerSession` members. */
+interface SessionRecord {
+  sessionId: string;
+  members: string[];
+  createdAt: number;
   lastPollAt?: number;
 }
 
@@ -38,7 +41,7 @@ interface ClientEntry {
  * ```ts
  * // partykit/server.ts
  * import { createReactorQueueServer } from "@reactor-team/queue-server";
- * export default createReactorQueueServer({ maxConcurrent: 3 });
+ * export default createReactorQueueServer({ model: "helios" });
  * ```
  */
 export function createReactorQueueServer(
@@ -53,8 +56,6 @@ export function createReactorQueueServer(
     private broadcastPending = false;
 
     constructor(readonly room: Party.Room) {}
-
-    // ── lazy config / coordinator (env is on room) ─────────────────────────
 
     private get config(): ResolvedConfig {
       if (!this.cfg) {
@@ -92,20 +93,56 @@ export function createReactorQueueServer(
     private async setQueue(queue: string[]): Promise<void> {
       await this.room.storage.put("queue", queue);
     }
-    private async getSession(connId: string): Promise<SessionData | undefined> {
-      return this.room.storage.get<SessionData>(`session:${connId}`);
+
+    private memberKey(connId: string): string {
+      return `member:${connId}`;
     }
-    private async setSession(connId: string, data: SessionData): Promise<void> {
-      await this.room.storage.put(`session:${connId}`, data);
+    private sessionKey(sessionId: string): string {
+      return `session:${sessionId}`;
     }
-    private async deleteSession(connId: string): Promise<void> {
-      await this.room.storage.delete(`session:${connId}`);
+
+    private async getMember(connId: string): Promise<MemberData | undefined> {
+      return this.room.storage.get<MemberData>(this.memberKey(connId));
     }
-    private async getAllSessions(): Promise<Map<string, SessionData>> {
-      return this.room.storage.list<SessionData>({ prefix: "session:" });
+    private async setMember(connId: string, data: MemberData): Promise<void> {
+      await this.room.storage.put(this.memberKey(connId), data);
     }
-    private async getActiveCount(): Promise<number> {
-      return (await this.getAllSessions()).size;
+    private async deleteMember(connId: string): Promise<void> {
+      await this.room.storage.delete(this.memberKey(connId));
+    }
+
+    private async getSessionRecord(sessionId: string): Promise<SessionRecord | undefined> {
+      return this.room.storage.get<SessionRecord>(this.sessionKey(sessionId));
+    }
+    private async setSessionRecord(record: SessionRecord): Promise<void> {
+      await this.room.storage.put(this.sessionKey(record.sessionId), record);
+    }
+    private async deleteSessionRecord(sessionId: string): Promise<void> {
+      await this.room.storage.delete(this.sessionKey(sessionId));
+    }
+
+    private async getAllMembers(): Promise<Map<string, MemberData>> {
+      return this.room.storage.list<MemberData>({ prefix: "member:" });
+    }
+    private async getAllSessionRecords(): Promise<Map<string, SessionRecord>> {
+      return this.room.storage.list<SessionRecord>({ prefix: "session:" });
+    }
+
+    private async getActiveMemberCount(): Promise<number> {
+      return (await this.getAllMembers()).size;
+    }
+
+    private async getSessionCount(): Promise<number> {
+      return (await this.getAllSessionRecords()).size;
+    }
+
+    /** First session with a free seat, or undefined. */
+    private async findOpenSession(): Promise<SessionRecord | undefined> {
+      const cap = this.config.usersPerSession;
+      for (const [, record] of await this.getAllSessionRecords()) {
+        if (record.members.length < cap) return record;
+      }
+      return undefined;
     }
 
     private async getClientEntry(clientId: string): Promise<ClientEntry | undefined> {
@@ -125,9 +162,6 @@ export function createReactorQueueServer(
     }
 
     private send(conn: Party.Connection, msg: ServerMessage) {
-      // The connection may close mid-flight (e.g. while a token is being minted
-      // over the network), which makes send() throw. Skip closed sockets and
-      // never let a stray send crash a handler.
       const ws = conn as { readyState?: number };
       if (ws.readyState !== undefined && ws.readyState !== 1 /* OPEN */) return;
       try {
@@ -156,7 +190,6 @@ export function createReactorQueueServer(
               conn.close(1008, "already_connected");
               return;
             }
-            // Stale ghost connection — evict and take over its place.
             await this.room.storage.delete(`cid:${clientId}`);
             await this.room.storage.delete(`conn:${entry.connId}`);
           }
@@ -166,6 +199,7 @@ export function createReactorQueueServer(
         const queue = await this.getQueue();
         queue.push(conn.id);
         await this.setQueue(queue);
+        this.config.hooks.onUserConnected?.(conn.id);
         await this.tryAdmitNext();
       } catch (err) {
         this.reportError("onConnect", err);
@@ -197,13 +231,13 @@ export function createReactorQueueServer(
           this.scheduleBroadcast();
         }
 
-        const session = await this.getSession(conn.id);
-        if (session) {
-          // Tab closed / network dropped while holding a slot: reap immediately
-          // rather than waiting for Reactor's own idle timeout.
-          await this.releaseSession(conn.id, session, "server", { notify: false });
+        const member = await this.getMember(conn.id);
+        if (member) {
+          await this.releaseMember(conn.id, member, "server", { notify: false });
           await this.tryAdmitNext();
         }
+
+        this.config.hooks.onUserDisconnected?.(conn.id);
       } catch (err) {
         this.reportError("onClose", err);
       }
@@ -230,41 +264,29 @@ export function createReactorQueueServer(
           }
 
           case "claim": {
-            const session = await this.getSession(sender.id);
-            if (session && !session.claimed) {
-              await this.setSession(sender.id, {
-                ...session,
+            const member = await this.getMember(sender.id);
+            if (member && !member.claimed) {
+              await this.setMember(sender.id, {
+                ...member,
                 expiresAt: Date.now() + this.config.sessionDurationMs,
                 warned: false,
                 claimed: true,
               });
-              this.config.hooks.onClaim?.(sender.id);
               await this.scheduleNextAlarm();
             }
             break;
           }
 
           case "request_token": {
-            // Only admitted/active slot-holders may obtain a token.
-            const session = await this.getSession(sender.id);
-            if (session) await this.mintAndSend(sender);
-            break;
-          }
-
-          case "session_started": {
-            const session = await this.getSession(sender.id);
-            if (session && msg.sessionId) {
-              await this.setSession(sender.id, { ...session, sessionId: msg.sessionId });
-              await this.scheduleNextAlarm();
-            }
+            const member = await this.getMember(sender.id);
+            if (member) await this.mintAndSend(sender);
             break;
           }
 
           case "session_ended": {
-            const session = await this.getSession(sender.id);
-            if (session) {
-              // Client already tore down the Reactor session; just free the slot.
-              await this.releaseSession(sender.id, session, "server", {
+            const member = await this.getMember(sender.id);
+            if (member) {
+              await this.releaseMember(sender.id, member, "server", {
                 notify: false,
                 stop: false,
               });
@@ -283,26 +305,29 @@ export function createReactorQueueServer(
       }
     }
 
-    /** HTTP introspection endpoint — handy for `curl`ing room state while debugging. */
     async onRequest(_req: Party.Request) {
       const queue = await this.getQueue();
-      const sessions = await this.getAllSessions();
+      const sessions = await this.getAllSessionRecords();
+      const activeCount = await this.getActiveMemberCount();
       const c = this.config;
       return new Response(
         JSON.stringify(
           {
-            maxConcurrent: c.maxConcurrent,
+            maxSessions: c.maxSessions,
+            usersPerSession: c.usersPerSession,
+            capacity: c.capacity,
             sessionDurationMs: c.sessionDurationMs,
             admissionGraceMs: c.admissionGraceMs,
+            model: c.model,
             tokenTtlSeconds: c.tokenTtlSeconds,
             pollIntervalMs: c.pollIntervalMs,
             queueLength: queue.length,
-            activeCount: sessions.size,
-            sessions: [...sessions].map(([k, v]) => ({
-              connId: k.replace("session:", ""),
-              claimed: v.claimed,
-              hasSession: Boolean(v.sessionId),
-              msLeft: Math.max(0, v.expiresAt - Date.now()),
+            activeCount,
+            sessionCount: sessions.size,
+            sessions: [...sessions].map(([, rec]) => ({
+              sessionId: rec.sessionId,
+              members: rec.members,
+              msSinceCreated: Date.now() - rec.createdAt,
             })),
           },
           null,
@@ -316,17 +341,16 @@ export function createReactorQueueServer(
 
     async onAlarm() {
       try {
-        const sessions = await this.getAllSessions();
+        const members = await this.getAllMembers();
         const now = Date.now();
         let freedAny = false;
 
-        for (const [key, data] of sessions) {
-          const connId = key.replace("session:", "");
+        for (const [key, data] of members) {
+          const connId = key.replace("member:", "");
 
           if (now >= data.expiresAt) {
             const reason = data.claimed ? "timeout" : "grace_timeout";
-            await this.releaseSession(connId, data, reason, { notify: true });
-            this.config.hooks.onExpire?.(connId, data.sessionId, reason);
+            await this.releaseMember(connId, data, reason, { notify: true });
             freedAny = true;
             continue;
           }
@@ -337,24 +361,29 @@ export function createReactorQueueServer(
               secondsLeft: Math.round((data.expiresAt - now) / 1000),
               expiresAt: data.expiresAt,
             });
-            await this.setSession(connId, { ...data, warned: true });
-            continue;
+            await this.setMember(connId, { ...data, warned: true });
           }
+        }
 
-          // Reconcile a live session against Reactor to catch a missed drop-out.
-          if (
-            data.claimed &&
-            data.sessionId &&
-            now - (data.lastPollAt ?? 0) >= this.config.pollIntervalMs
-          ) {
-            const state = await this.api.getSessionState(data.sessionId);
-            if (CoordinatorClient.isTerminal(state)) {
-              await this.releaseSession(connId, data, "server", { notify: true, stop: false });
-              this.config.hooks.onSessionReaped?.(connId, data.sessionId, state ?? "CLOSED");
-              freedAny = true;
-            } else {
-              await this.setSession(connId, { ...data, lastPollAt: now });
+        for (const [, record] of await this.getAllSessionRecords()) {
+          if (record.members.length === 0) continue;
+          if (now - (record.lastPollAt ?? 0) < this.config.pollIntervalMs) continue;
+
+          const state = await this.api.getSessionState(record.sessionId);
+          if (CoordinatorClient.isTerminal(state)) {
+            for (const connId of [...record.members]) {
+              const member = await this.getMember(connId);
+              if (member) {
+                await this.releaseMember(connId, member, "server", {
+                  notify: true,
+                  stop: false,
+                });
+              }
             }
+            await this.closeSessionRecord(record.sessionId, state ?? "CLOSED", false);
+            freedAny = true;
+          } else {
+            await this.setSessionRecord({ ...record, lastPollAt: now });
           }
         }
 
@@ -368,20 +397,25 @@ export function createReactorQueueServer(
     }
 
     private async scheduleNextAlarm(): Promise<void> {
-      const sessions = await this.getAllSessions();
-      if (sessions.size === 0) {
+      const members = await this.getAllMembers();
+      const sessions = await this.getAllSessionRecords();
+      if (members.size === 0 && sessions.size === 0) {
         await this.room.storage.deleteAlarm();
         return;
       }
 
       const now = Date.now();
       let earliest = Infinity;
-      for (const [, data] of sessions) {
+
+      for (const [, data] of members) {
         earliest = Math.min(earliest, data.expiresAt);
         if (data.claimed && !data.warned) {
           earliest = Math.min(earliest, data.expiresAt - this.config.warningBeforeMs);
         }
-        if (data.claimed && data.sessionId) {
+      }
+
+      for (const [, record] of sessions) {
+        if (record.members.length > 0) {
           earliest = Math.min(earliest, now + this.config.pollIntervalMs);
         }
       }
@@ -395,31 +429,73 @@ export function createReactorQueueServer(
 
     private async tryAdmitNext() {
       const queue = await this.getQueue();
-      let activeCount = await this.getActiveCount();
-      let admittedAny = false;
       let queueChanged = false;
+      let admittedAny = false;
 
-      while (activeCount < this.config.maxConcurrent && queue.length > 0) {
-        const connId = queue.shift()!;
+      while (queue.length > 0) {
+        const open = await this.findOpenSession();
+        const sessionCount = await this.getSessionCount();
+        if (!open && sessionCount >= this.config.maxSessions) break;
+
+        const connId = queue[0]!;
+        if (this.connectionsById(connId).length === 0) {
+          queue.shift();
+          queueChanged = true;
+          continue;
+        }
+
+        let sessionId: string;
+        let record: SessionRecord;
+
+        if (open) {
+          record = open;
+          sessionId = record.sessionId;
+        } else {
+          try {
+            sessionId = await this.api.createSession({
+              model: this.config.model,
+              webrtcVersion: this.config.webrtcVersion,
+            });
+          } catch (err) {
+            this.reportError("createSession", err);
+            break;
+          }
+          record = {
+            sessionId,
+            members: [],
+            createdAt: Date.now(),
+          };
+          await this.setSessionRecord(record);
+          this.config.hooks.onSessionCreated?.(sessionId);
+        }
+
+        queue.shift();
         queueChanged = true;
-        if (this.connectionsById(connId).length === 0) continue; // dead/hibernated; drop
 
-        activeCount++;
-        await this.setSession(connId, {
+        record = {
+          ...record,
+          members: [...record.members, connId],
+        };
+        await this.setSessionRecord(record);
+
+        await this.setMember(connId, {
+          sessionId,
           expiresAt: Date.now() + this.config.admissionGraceMs,
           warned: false,
           claimed: false,
         });
+
+        const activeCount = await this.getActiveMemberCount();
         this.sendTo(connId, {
           type: "admitted",
           active: activeCount,
-          maxConcurrent: this.config.maxConcurrent,
+          capacity: this.config.capacity,
           graceMs: this.config.admissionGraceMs,
           sessionDurationMs: this.config.sessionDurationMs,
+          sessionId,
         });
-        // Hand over the first JWT right away so the client can connect.
         for (const conn of this.connectionsById(connId)) await this.mintAndSend(conn);
-        this.config.hooks.onAdmit?.(connId);
+        this.config.hooks.onUserEnteredSession?.(connId, sessionId);
         admittedAny = true;
       }
 
@@ -439,27 +515,48 @@ export function createReactorQueueServer(
     }
 
     /**
-     * Free a slot: optionally notify the client, optionally stop the underlying
-     * Reactor session, then delete the durable record.
+     * Remove a member from their session. When the session is empty, optionally
+     * stop the Reactor session and fire `onSessionClosed`.
      */
-    private async releaseSession(
+    private async releaseMember(
       connId: string,
-      data: SessionData,
+      data: MemberData,
       reason: "timeout" | "grace_timeout" | "server",
       opts: { notify: boolean; stop?: boolean }
     ): Promise<void> {
       if (opts.notify) {
         this.sendTo(connId, { type: "expired", reason });
       }
-      const shouldStop = (opts.stop ?? true) && this.config.stopSessionsOnExpiry && data.sessionId;
-      if (shouldStop && data.sessionId) {
+
+      const record = await this.getSessionRecord(data.sessionId);
+      if (record) {
+        const nextMembers = record.members.filter((id) => id !== connId);
+        if (nextMembers.length === 0) {
+          const shouldStop =
+            (opts.stop ?? true) && this.config.stopSessionsOnExpiry;
+          await this.closeSessionRecord(data.sessionId, reason, shouldStop);
+        } else {
+          await this.setSessionRecord({ ...record, members: nextMembers });
+        }
+      }
+
+      await this.deleteMember(connId);
+    }
+
+    private async closeSessionRecord(
+      sessionId: string,
+      reason: string,
+      stop: boolean
+    ): Promise<void> {
+      if (stop) {
         try {
-          await this.api.stopSession(data.sessionId);
+          await this.api.stopSession(sessionId, `queue: ${reason}`);
         } catch (err) {
           this.reportError("stopSession", err);
         }
       }
-      await this.deleteSession(connId);
+      await this.deleteSessionRecord(sessionId);
+      this.config.hooks.onSessionClosed?.(sessionId, reason);
     }
 
     // ── position broadcasting (coalesced) ─────────────────────────────────────
@@ -477,7 +574,7 @@ export function createReactorQueueServer(
 
     private async broadcastPositions() {
       const queue = await this.getQueue();
-      const activeCount = await this.getActiveCount();
+      const activeCount = await this.getActiveMemberCount();
       for (let i = 0; i < queue.length; i++) {
         const connId = queue[i]!;
         this.sendTo(connId, {
@@ -485,7 +582,7 @@ export function createReactorQueueServer(
           position: i + 1,
           total: queue.length,
           active: activeCount,
-          maxConcurrent: this.config.maxConcurrent,
+          capacity: this.config.capacity,
         });
       }
     }

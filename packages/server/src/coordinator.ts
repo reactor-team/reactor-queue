@@ -1,15 +1,16 @@
 import { TERMINAL_SESSION_STATES } from "@reactor-team/queue-protocol";
 
 /**
- * Thin server-side client for the Reactor Coordinator REST API. It does exactly
- * three things, all from inside the trusted PartyKit server:
+ * Thin server-side client for the Reactor Coordinator REST API. From inside the
+ * trusted PartyKit server it:
  *
- *  1. mint short-lived client JWTs from the API key (`POST /tokens`),
- *  2. read a session's state (`GET /sessions/{id}/runtime`), and
- *  3. stop a session (`DELETE /sessions/{id}`).
+ *  1. mints short-lived client JWTs from the API key (`POST /tokens`),
+ *  2. creates sessions (`POST /sessions`),
+ *  3. reads a session's state (`GET /sessions/{id}/runtime`), and
+ *  4. stops a session (`DELETE /sessions/{id}`).
  *
- * (2) and (3) need a Bearer JWT, so the client keeps its own cached "server
- * JWT" (minted with a longer TTL) and reuses it across calls.
+ * (2)–(4) need a Bearer JWT, so the client keeps its own cached "server JWT"
+ * (minted with a longer TTL) and reuses it across calls.
  */
 export class CoordinatorClient {
   private readonly baseUrl: string;
@@ -98,6 +99,43 @@ export class CoordinatorClient {
   /** True if a state string means the slot should be released. */
   static isTerminal(state: string | null): boolean {
     return state !== null && (TERMINAL_SESSION_STATES as readonly string[]).includes(state);
+  }
+
+  /**
+   * Create a Reactor session for the configured model. Returns the new
+   * `session_id`. Runs billing/quota checks against the server's API key.
+   */
+  async createSession(opts: {
+    model: string;
+    webrtcVersion: string;
+  }): Promise<string> {
+    const jwt = await this.getServerJwt();
+    const res = await fetch(`${this.baseUrl}/sessions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${jwt}`,
+        ...this.versionHeaders(),
+      },
+      body: JSON.stringify({
+        model: { name: opts.model },
+        client_info: {
+          sdk_version: "@reactor-team/queue-server/0.1.0",
+          sdk_type: "js",
+        },
+        supported_transports: [{ protocol: "webrtc", version: opts.webrtcVersion }],
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => res.statusText);
+      throw new Error(`createSession failed: ${res.status} ${detail}`);
+    }
+
+    const data = (await res.json()) as { session_id?: string };
+    const sessionId = data.session_id;
+    if (!sessionId) throw new Error("createSession: no session_id in response");
+    return sessionId;
   }
 
   /** Force-close a session. Swallows "already gone" responses. */

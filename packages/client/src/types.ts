@@ -26,8 +26,8 @@ export interface QueueState {
   total: number;
   /** Sessions currently active across all users. */
   active: number;
-  /** Server's concurrency cap. */
-  maxConcurrent: number;
+  /** Total live users the server allows (maxSessions × usersPerSession). */
+  capacity: number;
   /** Current short-lived Reactor JWT, or null. */
   token: string | null;
   /** Unix epoch seconds at which `token` expires. */
@@ -38,7 +38,7 @@ export interface QueueState {
   sessionDurationMs: number | null;
   /** Seconds left as of the last `time_warning`, else null. */
   secondsLeft: number | null;
-  /** Reactor session id this slot is driving, once reported. */
+  /** Reactor session id from the server (set on `admitted`). */
   sessionId: string | null;
   /** Reason for the most recent rejection/expiry/error, if any. */
   reason: string | null;
@@ -49,7 +49,7 @@ export const INITIAL_STATE: QueueState = {
   position: 0,
   total: 0,
   active: 0,
-  maxConcurrent: 0,
+  capacity: 0,
   token: null,
   tokenExpiresAt: null,
   sessionEndsAt: null,
