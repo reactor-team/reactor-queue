@@ -17,16 +17,25 @@ import { CoordinatorClient } from "./coordinator";
 
 /** Per admitted member. Lives in durable storage under `member:<connId>`. */
 interface MemberData {
-  sessionId: string;
+  /** The capacity slot this member occupies. */
+  slotId: string;
+  /** Reactor session id once the slot's session is created (on claim); null during grace. */
+  sessionId: string | null;
   /** Epoch ms when this member's slot is reclaimed (grace or full session). */
   expiresAt: number;
   warned: boolean;
   claimed: boolean;
 }
 
-/** One Reactor session shared by up to `usersPerSession` members. */
-interface SessionRecord {
-  sessionId: string;
+/**
+ * A capacity slot shared by up to `usersPerSession` members. Reserved at
+ * admission; its Reactor session is created lazily on the first `claim()` so an
+ * abandoned grace never orphans a GPU session.
+ */
+interface SlotRecord {
+  slotId: string;
+  /** Reactor session id, or null until the first member claims. */
+  sessionId: string | null;
   members: string[];
   createdAt: number;
   lastPollAt?: number;
@@ -103,8 +112,8 @@ export function createReactorQueueServer(
     private memberKey(connId: string): string {
       return `member:${connId}`;
     }
-    private sessionKey(sessionId: string): string {
-      return `session:${sessionId}`;
+    private slotKey(slotId: string): string {
+      return `slot:${slotId}`;
     }
 
     private async getMember(connId: string): Promise<MemberData | undefined> {
@@ -117,38 +126,56 @@ export function createReactorQueueServer(
       await this.room.storage.delete(this.memberKey(connId));
     }
 
-    private async getSessionRecord(sessionId: string): Promise<SessionRecord | undefined> {
-      return this.room.storage.get<SessionRecord>(this.sessionKey(sessionId));
+    private async getSlot(slotId: string): Promise<SlotRecord | undefined> {
+      return this.room.storage.get<SlotRecord>(this.slotKey(slotId));
     }
-    private async setSessionRecord(record: SessionRecord): Promise<void> {
-      await this.room.storage.put(this.sessionKey(record.sessionId), record);
+    private async setSlot(record: SlotRecord): Promise<void> {
+      await this.room.storage.put(this.slotKey(record.slotId), record);
     }
-    private async deleteSessionRecord(sessionId: string): Promise<void> {
-      await this.room.storage.delete(this.sessionKey(sessionId));
+    private async deleteSlot(slotId: string): Promise<void> {
+      await this.room.storage.delete(this.slotKey(slotId));
     }
 
     private async getAllMembers(): Promise<Map<string, MemberData>> {
       return this.room.storage.list<MemberData>({ prefix: "member:" });
     }
-    private async getAllSessionRecords(): Promise<Map<string, SessionRecord>> {
-      return this.room.storage.list<SessionRecord>({ prefix: "session:" });
+    private async getAllSlots(): Promise<Map<string, SlotRecord>> {
+      return this.room.storage.list<SlotRecord>({ prefix: "slot:" });
     }
 
     private async getActiveMemberCount(): Promise<number> {
       return (await this.getAllMembers()).size;
     }
 
-    private async getSessionCount(): Promise<number> {
-      return (await this.getAllSessionRecords()).size;
+    private async getSlotCount(): Promise<number> {
+      return (await this.getAllSlots()).size;
     }
 
-    /** First session with a free seat, or undefined. */
-    private async findOpenSession(): Promise<SessionRecord | undefined> {
+    /** Number of slots whose Reactor session is actually created (live GPU sessions). */
+    private async getCreatedSessionCount(): Promise<number> {
+      let n = 0;
+      for (const [, slot] of await this.getAllSlots()) if (slot.sessionId) n++;
+      return n;
+    }
+
+    /** First slot with a free seat, or undefined. */
+    private async findOpenSlot(): Promise<SlotRecord | undefined> {
       const cap = this.config.usersPerSession;
-      for (const [, record] of await this.getAllSessionRecords()) {
+      for (const [, record] of await this.getAllSlots()) {
         if (record.members.length < cap) return record;
       }
       return undefined;
+    }
+
+    private async findSlotBySessionId(sessionId: string): Promise<SlotRecord | undefined> {
+      for (const [, slot] of await this.getAllSlots()) {
+        if (slot.sessionId === sessionId) return slot;
+      }
+      return undefined;
+    }
+
+    private genId(): string {
+      return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     }
 
     private async getClientEntry(clientId: string): Promise<ClientEntry | undefined> {
@@ -212,7 +239,7 @@ export function createReactorQueueServer(
       return buildAdminSnapshot({
         config: this.config,
         queue: await this.getQueue(),
-        sessions: await this.getAllSessionRecords(),
+        slots: await this.getAllSlots(),
         members: await this.getAllMembers(),
         resolveClientId: (connId) => this.resolveClientIdForConn(connId),
       });
@@ -275,15 +302,15 @@ export function createReactorQueueServer(
     }
 
     private async adminCloseSession(sessionId: string): Promise<{ ok: boolean; message?: string }> {
-      const record = await this.getSessionRecord(sessionId);
-      if (!record) return { ok: false, message: "session_not_found" };
-      for (const connId of [...record.members]) {
+      const slot = await this.findSlotBySessionId(sessionId);
+      if (!slot) return { ok: false, message: "session_not_found" };
+      for (const connId of [...slot.members]) {
         const member = await this.getMember(connId);
         if (member) {
           await this.releaseMember(connId, member, "server", { notify: true, stop: false });
         }
       }
-      await this.closeSessionRecord(sessionId, "admin", true);
+      await this.closeSlot(slot.slotId, "admin", true);
       await this.tryAdmitNext();
       this.scheduleAdminBroadcast();
       return { ok: true };
@@ -473,13 +500,7 @@ export function createReactorQueueServer(
           case "claim": {
             const member = await this.getMember(sender.id);
             if (member && !member.claimed) {
-              await this.setMember(sender.id, {
-                ...member,
-                expiresAt: Date.now() + this.config.sessionDurationMs,
-                warned: false,
-                claimed: true,
-              });
-              await this.scheduleNextAlarm();
+              await this.claimMember(sender.id, member);
             }
             break;
           }
@@ -514,8 +535,9 @@ export function createReactorQueueServer(
 
     async onRequest(_req: Party.Request) {
       const queue = await this.getQueue();
-      const sessions = await this.getAllSessionRecords();
+      const slots = await this.getAllSlots();
       const activeCount = await this.getActiveMemberCount();
+      const createdSessions = [...slots].filter(([, s]) => s.sessionId).length;
       const c = this.config;
       return new Response(
         JSON.stringify(
@@ -530,8 +552,10 @@ export function createReactorQueueServer(
             pollIntervalMs: c.pollIntervalMs,
             queueLength: queue.length,
             activeCount,
-            sessionCount: sessions.size,
-            sessions: [...sessions].map(([, rec]) => ({
+            slotCount: slots.size,
+            sessionCount: createdSessions,
+            slots: [...slots].map(([, rec]) => ({
+              slotId: rec.slotId,
               sessionId: rec.sessionId,
               members: rec.members,
               msSinceCreated: Date.now() - rec.createdAt,
@@ -572,13 +596,14 @@ export function createReactorQueueServer(
           }
         }
 
-        for (const [, record] of await this.getAllSessionRecords()) {
-          if (record.members.length === 0) continue;
-          if (now - (record.lastPollAt ?? 0) < this.config.pollIntervalMs) continue;
+        for (const [, slot] of await this.getAllSlots()) {
+          // Only poll slots whose Reactor session actually exists.
+          if (!slot.sessionId || slot.members.length === 0) continue;
+          if (now - (slot.lastPollAt ?? 0) < this.config.pollIntervalMs) continue;
 
-          const state = await this.api.getSessionState(record.sessionId);
+          const state = await this.api.getSessionState(slot.sessionId);
           if (CoordinatorClient.isTerminal(state)) {
-            for (const connId of [...record.members]) {
+            for (const connId of [...slot.members]) {
               const member = await this.getMember(connId);
               if (member) {
                 await this.releaseMember(connId, member, "server", {
@@ -587,10 +612,10 @@ export function createReactorQueueServer(
                 });
               }
             }
-            await this.closeSessionRecord(record.sessionId, state ?? "CLOSED", false);
+            await this.closeSlot(slot.slotId, state ?? "CLOSED", false);
             freedAny = true;
           } else {
-            await this.setSessionRecord({ ...record, lastPollAt: now });
+            await this.setSlot({ ...slot, lastPollAt: now });
           }
         }
 
@@ -606,8 +631,8 @@ export function createReactorQueueServer(
 
     private async scheduleNextAlarm(): Promise<void> {
       const members = await this.getAllMembers();
-      const sessions = await this.getAllSessionRecords();
-      if (members.size === 0 && sessions.size === 0) {
+      const slots = await this.getAllSlots();
+      if (members.size === 0 && slots.size === 0) {
         await this.room.storage.deleteAlarm();
         return;
       }
@@ -622,8 +647,8 @@ export function createReactorQueueServer(
         }
       }
 
-      for (const [, record] of sessions) {
-        if (record.members.length > 0) {
+      for (const [, slot] of slots) {
+        if (slot.sessionId && slot.members.length > 0) {
           earliest = Math.min(earliest, now + this.config.pollIntervalMs);
         }
       }
@@ -641,9 +666,10 @@ export function createReactorQueueServer(
       let admittedAny = false;
 
       while (queue.length > 0) {
-        const open = await this.findOpenSession();
-        const sessionCount = await this.getSessionCount();
-        if (!open && sessionCount >= this.config.maxSessions) break;
+        const open = await this.findOpenSlot();
+        const slotCount = await this.getSlotCount();
+        // Reserve a seat in an open slot, or open a new slot if under the cap.
+        if (!open && slotCount >= this.config.maxSessions) break;
 
         const connId = queue[0]!;
         if (this.connectionsById(connId).length === 0) {
@@ -652,42 +678,23 @@ export function createReactorQueueServer(
           continue;
         }
 
-        let sessionId: string;
-        let record: SessionRecord;
-
+        let slot: SlotRecord;
         if (open) {
-          record = open;
-          sessionId = record.sessionId;
+          slot = open;
         } else {
-          try {
-            sessionId = await this.api.createSession({
-              model: this.config.model,
-              webrtcVersion: this.config.webrtcVersion,
-            });
-          } catch (err) {
-            this.reportError("createSession", err);
-            break;
-          }
-          record = {
-            sessionId,
-            members: [],
-            createdAt: Date.now(),
-          };
-          await this.setSessionRecord(record);
-          this.config.hooks.onSessionCreated?.(sessionId);
+          // No Reactor session yet — created lazily on claim to avoid orphans.
+          slot = { slotId: this.genId(), sessionId: null, members: [], createdAt: Date.now() };
         }
 
         queue.shift();
         queueChanged = true;
 
-        record = {
-          ...record,
-          members: [...record.members, connId],
-        };
-        await this.setSessionRecord(record);
+        slot = { ...slot, members: [...slot.members, connId] };
+        await this.setSlot(slot);
 
         await this.setMember(connId, {
-          sessionId,
+          slotId: slot.slotId,
+          sessionId: null,
           expiresAt: Date.now() + this.config.admissionGraceMs,
           warned: false,
           claimed: false,
@@ -700,10 +707,10 @@ export function createReactorQueueServer(
           capacity: this.config.capacity,
           graceMs: this.config.admissionGraceMs,
           sessionDurationMs: this.config.sessionDurationMs,
-          sessionId,
         });
+        // Token can be minted now (it's not session-scoped); the SDK uses it
+        // after claim. getJwt/request_token keep it fresh.
         for (const conn of this.connectionsById(connId)) await this.mintAndSend(conn);
-        this.config.hooks.onUserEnteredSession?.(connId, sessionId);
         admittedAny = true;
       }
 
@@ -711,6 +718,57 @@ export function createReactorQueueServer(
       if (admittedAny) await this.scheduleNextAlarm();
       this.scheduleBroadcast();
       if (queueChanged || admittedAny) this.scheduleAdminBroadcast();
+    }
+
+    /**
+     * The member confirmed entry. Create the slot's Reactor session if it does
+     * not exist yet (or reuse it for a multi-member slot), start the full
+     * session timer, and hand back the session id to attach to.
+     */
+    private async claimMember(connId: string, member: MemberData): Promise<void> {
+      const slot = await this.getSlot(member.slotId);
+      if (!slot) {
+        // Slot vanished (e.g. reaped); nothing to claim.
+        return;
+      }
+
+      let sessionId = slot.sessionId;
+      if (!sessionId) {
+        try {
+          sessionId = await this.api.createSession({
+            model: this.config.model,
+            webrtcVersion: this.config.webrtcVersion,
+          });
+        } catch (err) {
+          this.reportError("createSession", err);
+          this.send(
+            this.connectionsById(connId)[0] ?? ({} as Party.Connection),
+            { type: "error", message: "session_create_failed" }
+          );
+          return;
+        }
+        await this.setSlot({ ...slot, sessionId });
+        this.config.hooks.onSessionCreated?.(sessionId);
+      }
+
+      const expiresAt = Date.now() + this.config.sessionDurationMs;
+      await this.setMember(connId, {
+        ...member,
+        sessionId,
+        expiresAt,
+        warned: false,
+        claimed: true,
+      });
+
+      this.sendTo(connId, {
+        type: "session_ready",
+        sessionId,
+        sessionDurationMs: this.config.sessionDurationMs,
+        expiresAt,
+      });
+      this.config.hooks.onUserEnteredSession?.(connId, sessionId);
+      await this.scheduleNextAlarm();
+      this.scheduleAdminBroadcast();
     }
 
     private async mintAndSend(conn: Party.Connection): Promise<void> {
@@ -724,8 +782,8 @@ export function createReactorQueueServer(
     }
 
     /**
-     * Remove a member from their session. When the session is empty, optionally
-     * stop the Reactor session and fire `onSessionClosed`.
+     * Remove a member from its slot. When the slot is empty, stop its Reactor
+     * session (if one was ever created) and fire `onSessionClosed`.
      */
     private async releaseMember(
       connId: string,
@@ -737,35 +795,37 @@ export function createReactorQueueServer(
         this.sendTo(connId, { type: "expired", reason });
       }
 
-      const record = await this.getSessionRecord(data.sessionId);
-      if (record) {
-        const nextMembers = record.members.filter((id) => id !== connId);
+      const slot = await this.getSlot(data.slotId);
+      if (slot) {
+        const nextMembers = slot.members.filter((id) => id !== connId);
         if (nextMembers.length === 0) {
-          const shouldStop =
-            (opts.stop ?? true) && this.config.stopSessionsOnExpiry;
-          await this.closeSessionRecord(data.sessionId, reason, shouldStop);
+          const shouldStop = (opts.stop ?? true) && this.config.stopSessionsOnExpiry;
+          await this.closeSlot(slot.slotId, reason, shouldStop);
         } else {
-          await this.setSessionRecord({ ...record, members: nextMembers });
+          await this.setSlot({ ...slot, members: nextMembers });
         }
       }
 
       await this.deleteMember(connId);
     }
 
-    private async closeSessionRecord(
-      sessionId: string,
-      reason: string,
-      stop: boolean
-    ): Promise<void> {
-      if (stop) {
+    /**
+     * Tear down a slot: stop its Reactor session if one exists (and `stop`),
+     * delete the record, fire `onSessionClosed`. A slot whose session was never
+     * created (abandoned grace) closes with nothing to stop — no orphan.
+     */
+    private async closeSlot(slotId: string, reason: string, stop: boolean): Promise<void> {
+      const slot = await this.getSlot(slotId);
+      const sessionId = slot?.sessionId ?? null;
+      if (stop && sessionId) {
         try {
           await this.api.stopSession(sessionId, `queue: ${reason}`);
         } catch (err) {
           this.reportError("stopSession", err);
         }
       }
-      await this.deleteSessionRecord(sessionId);
-      this.config.hooks.onSessionClosed?.(sessionId, reason);
+      await this.deleteSlot(slotId);
+      if (sessionId) this.config.hooks.onSessionClosed?.(sessionId, reason);
       this.scheduleAdminBroadcast();
     }
 

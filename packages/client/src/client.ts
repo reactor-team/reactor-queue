@@ -144,15 +144,15 @@ export class ReactorQueueClient {
     this.connect();
   }
 
-  /** "I'm entering the demo now" — upgrades the grace window to the full session. */
+  /**
+   * "I'm entering the demo now." The server creates the Reactor session and
+   * replies with `session_ready` (carrying `sessionId`). Until then we sit in
+   * `starting` so the UI can show a spinner; we do not have a `sessionId` yet.
+   */
   claim(): void {
     this.send({ type: "claim" });
-    // Optimistically reflect the full session window for countdown UIs.
     if (this.state.phase === "admitted") {
-      const sessionEndsAt = this.state.sessionDurationMs
-        ? Date.now() + this.state.sessionDurationMs
-        : this.state.sessionEndsAt;
-      this.setState({ phase: "active", sessionEndsAt, secondsLeft: null });
+      this.setState({ phase: "starting", secondsLeft: null });
     }
   }
 
@@ -254,7 +254,7 @@ export class ReactorQueueClient {
     this.refreshTimer = setTimeout(
       () => {
         if (this.destroyed) return;
-        if (this.state.phase === "admitted" || this.state.phase === "active") {
+        if (["admitted", "starting", "active"].includes(this.state.phase)) {
           this.requestToken().catch(() => {
             /* reactive getJwt will retry when the SDK next needs a token */
           });
@@ -304,13 +304,26 @@ export class ReactorQueueClient {
 
       case "admitted":
         this.setState({
-          phase: this.state.phase === "active" ? "active" : "admitted",
+          // Stay in active/starting if a late admitted arrives; otherwise the
+          // user must claim to get a session.
+          phase: this.state.phase === "active" || this.state.phase === "starting"
+            ? this.state.phase
+            : "admitted",
           position: 0,
           total: 0,
           active: msg.active,
           capacity: msg.capacity,
-          sessionId: msg.sessionId,
           sessionEndsAt: Date.now() + msg.graceMs,
+          sessionDurationMs: msg.sessionDurationMs,
+          secondsLeft: null,
+        });
+        break;
+
+      case "session_ready":
+        this.setState({
+          phase: "active",
+          sessionId: msg.sessionId,
+          sessionEndsAt: msg.expiresAt,
           sessionDurationMs: msg.sessionDurationMs,
           secondsLeft: null,
         });
@@ -352,7 +365,7 @@ export class ReactorQueueClient {
   private handleClose(): void {
     this.stopHeartbeat();
     // Only downgrade phase if we weren't already in a terminal state.
-    if (["connecting", "queued", "admitted", "active"].includes(this.state.phase)) {
+    if (["connecting", "queued", "admitted", "starting", "active"].includes(this.state.phase)) {
       this.setState({ phase: "disconnected" });
     }
   }

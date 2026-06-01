@@ -120,7 +120,7 @@ export class CoordinatorClient {
       body: JSON.stringify({
         model: { name: opts.model },
         client_info: {
-          sdk_version: "@reactor-team/queue-server/0.1.0",
+          sdk_version: "0.1.0",
           sdk_type: "js",
         },
         supported_transports: [{ protocol: "webrtc", version: opts.webrtcVersion }],

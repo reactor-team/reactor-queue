@@ -200,60 +200,73 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
         </Card>
       </div>
 
-      {/* Active Reactor sessions */}
+      {/* Active Reactor sessions (slots; a session is created only on claim) */}
       <section style={s.section}>
-        <h2 style={s.h2}>Active Reactor sessions ({snapshot.sessions.length})</h2>
+        <h2 style={s.h2}>
+          Active Reactor sessions ({snapshot.sessionCount}
+          {snapshot.sessions.length > snapshot.sessionCount
+            ? ` · ${snapshot.sessions.length - snapshot.sessionCount} reserved`
+            : ""}
+          )
+        </h2>
         {snapshot.sessions.length === 0 ? (
           <Card>
             <p style={s.muted}>No active sessions.</p>
           </Card>
         ) : (
           <div style={s.sessionGrid}>
-            {snapshot.sessions.map((sess) => (
-              <div key={sess.sessionId} style={s.sessionCard}>
-                <div style={s.rowBetween}>
-                  <div>
-                    <div style={s.sessionId}>{shortId(sess.sessionId)}</div>
-                    <div style={s.muted}>
-                      {sess.members.length} / {cfg.usersPerSession} users · age{" "}
-                      {formatMs(sess.msSinceCreated)}
+            {snapshot.sessions.map((sess, i) => {
+              const pending = !sess.sessionId;
+              return (
+                <div key={sess.sessionId ?? `reserved-${i}`} style={s.sessionCard}>
+                  <div style={s.rowBetween}>
+                    <div>
+                      <div style={s.sessionId}>
+                        {pending ? "Reserved (grace)" : shortId(sess.sessionId!)}
+                      </div>
+                      <div style={s.muted}>
+                        {sess.members.length} / {cfg.usersPerSession} users · age{" "}
+                        {formatMs(sess.msSinceCreated)}
+                      </div>
                     </div>
+                    {!pending && (
+                      <button
+                        type="button"
+                        style={s.btnDanger}
+                        onClick={() => admin.closeSession(sess.sessionId!)}
+                      >
+                        Close session
+                      </button>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    style={s.btnDanger}
-                    onClick={() => admin.closeSession(sess.sessionId)}
-                  >
-                    Close session
-                  </button>
+                  <div style={s.memberRows}>
+                    {sess.members.length === 0 ? (
+                      <p style={s.muted}>No members.</p>
+                    ) : (
+                      sess.members.map((connId) => {
+                        const m = memberByConn.get(connId);
+                        return (
+                          <div key={connId} style={s.memberRow}>
+                            <span style={s.mono}>{shortId(connId)}</span>
+                            <span style={s.memberMeta}>
+                              {m ? (m.claimed ? "active" : "grace") : "—"}
+                              {m ? ` · ${formatMs(m.msLeft)}` : ""}
+                            </span>
+                            <button
+                              type="button"
+                              style={s.btnDanger}
+                              onClick={() => admin.kickMember(connId)}
+                            >
+                              Evict
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
-                <div style={s.memberRows}>
-                  {sess.members.length === 0 ? (
-                    <p style={s.muted}>No members.</p>
-                  ) : (
-                    sess.members.map((connId) => {
-                      const m = memberByConn.get(connId);
-                      return (
-                        <div key={connId} style={s.memberRow}>
-                          <span style={s.mono}>{shortId(connId)}</span>
-                          <span style={s.memberMeta}>
-                            {m ? (m.claimed ? "active" : "grace") : "—"}
-                            {m ? ` · ${formatMs(m.msLeft)}` : ""}
-                          </span>
-                          <button
-                            type="button"
-                            style={s.btnDanger}
-                            onClick={() => admin.kickMember(connId)}
-                          >
-                            Evict
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

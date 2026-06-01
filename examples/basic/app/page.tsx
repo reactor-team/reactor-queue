@@ -107,6 +107,16 @@ function Gate() {
         </Center>
       );
 
+    case "starting":
+      return (
+        <Center>
+          <Card>
+            <Spinner />
+            <p style={{ ...s.muted, marginTop: 16 }}>Starting your session…</p>
+          </Card>
+        </Center>
+      );
+
     case "active":
       return q.sessionId ? <Session sessionId={q.sessionId} onLeave={leave} /> : null;
 

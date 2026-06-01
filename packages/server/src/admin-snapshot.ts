@@ -8,13 +8,14 @@ import type {
 import type { ResolvedConfig } from "./config";
 
 interface MemberData {
-  sessionId: string;
+  sessionId: string | null;
   expiresAt: number;
   claimed: boolean;
 }
 
-interface SessionRecord {
-  sessionId: string;
+interface SlotRecord {
+  slotId: string;
+  sessionId: string | null;
   members: string[];
   createdAt: number;
 }
@@ -41,7 +42,7 @@ export function configSnapshot(c: ResolvedConfig): AdminConfigSnapshot {
 export function buildAdminSnapshot(opts: {
   config: ResolvedConfig;
   queue: string[];
-  sessions: Map<string, SessionRecord>;
+  slots: Map<string, SlotRecord>;
   members: Map<string, MemberData>;
   resolveClientId: (connId: string) => Promise<string | null>;
 }): Promise<AdminSnapshotMessage> {
@@ -58,12 +59,14 @@ export function buildAdminSnapshot(opts: {
     }
 
     const sessions: AdminSessionSnapshot[] = [];
-    for (const [, rec] of opts.sessions) {
+    let createdSessions = 0;
+    for (const [, slot] of opts.slots) {
+      if (slot.sessionId) createdSessions++;
       sessions.push({
-        sessionId: rec.sessionId,
-        members: [...rec.members],
-        createdAt: rec.createdAt,
-        msSinceCreated: now - rec.createdAt,
+        sessionId: slot.sessionId,
+        members: [...slot.members],
+        createdAt: slot.createdAt,
+        msSinceCreated: now - slot.createdAt,
       });
     }
     sessions.sort((a, b) => a.createdAt - b.createdAt);
@@ -86,7 +89,7 @@ export function buildAdminSnapshot(opts: {
       type: "admin_snapshot",
       at: now,
       activeCount: opts.members.size,
-      sessionCount: opts.sessions.size,
+      sessionCount: createdSessions,
       config: configSnapshot(opts.config),
       queue,
       sessions,

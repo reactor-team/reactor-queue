@@ -62,7 +62,7 @@ Reactor who needs to meter live access to a model:
  │ @reactor-team/queue │◀───────────▶│ @reactor-team/queue-server │────────▶│ POST /tokens         │
  │  • partysocket      │   queue +   │  • FIFO queue + session cap │         │ POST /sessions       │
  │  • getJwt() resolver│   tokens    │  • mints 60s Reactor JWTs  │         │ GET  /sessions/{id}  │
- │  • sessionId on admit│             │  • creates sessions on admit│         │ DELETE /sessions/{id}│
+ │  • sessionId on claim│             │  • creates sessions on claim│         │ DELETE /sessions/{id}│
  │  • zustand store    │             │  • per-user session timer  │         └──────────────────────┘
  └──────────┬──────────┘             │  • stops + reaps sessions  │
             │                        └────────────────────────────┘
@@ -73,10 +73,12 @@ Reactor who needs to meter live access to a model:
 
 The queue server is the **single source of truth**. It:
 
-1. Lines users up FIFO and admits into an open session (fill seats before creating
-   a new one) up to `maxSessions` Reactor sessions × `usersPerSession` members each.
-2. **Creates the Reactor session** (`POST /sessions`) on admission and sends
-   `sessionId` with `admitted` so the client attaches via `connect({ sessionId })`.
+1. Lines users up FIFO and reserves a capacity **slot** for the head (fill open
+   slots before opening new ones) up to `maxSessions` × `usersPerSession` members.
+2. **Creates the Reactor session lazily on `claim()`** (`POST /sessions`), then
+   sends `session_ready { sessionId }` so the client attaches via
+   `connect({ sessionId })`. Nothing is created during grace, so an abandoned
+   admission never orphans a GPU session.
 3. **Mints the Reactor JWT itself** (API key is a server secret) and sends it
    only to admitted users — _the queue returns the JWT_.
 4. Issues **very short-lived tokens** (default 60s). The client refreshes them
@@ -96,18 +98,24 @@ Terminology is **session** everywhere (no “room” or “slot” in the API):
 
 | Concept | Meaning |
 |---|---|
-| **Session** | One Reactor session id (`POST /sessions` on the PartyKit server). Holds up to `usersPerSession` members. |
-| **Member** | One admitted browser connection. Has its own grace/claim timer (`member:<connId>` in durable storage). |
+| **Slot** | A capacity reservation (`slot:<id>` in durable storage). Holds up to `usersPerSession` members and lazily owns one Reactor session. |
+| **Member** | One admitted browser connection. Has its own grace/claim timer (`member:<connId>`). |
 | **Queue** | FIFO list of connection ids still waiting for capacity. |
 
-Admission **fills an open session before creating a new one**: if any
-`session:*` record has `members.length < usersPerSession`, the head of the
-queue joins it; otherwise, when `sessionCount < maxSessions`, the server calls
-`POST /sessions` and starts a new session record.
+Admission **fills an open slot before opening a new one**: if any slot has
+`members.length < usersPerSession`, the head of the queue takes a seat there;
+otherwise, when `slotCount < maxSessions`, a new (sessionless) slot is opened.
 
-When the **last member** leaves a session (timeout, `session_ended`, tab close,
-or poll seeing `CLOSED`/`INACTIVE`), the server `DELETE`s that Reactor session
-(if `RQ_STOP_SESSIONS` is enabled) and removes the `session:*` record.
+**The Reactor session is created on `claim()`, not at admission.** When the
+first member of a slot claims, the server calls `POST /sessions`, stores the id
+on the slot, and sends `session_ready { sessionId }`. Other members of the same
+slot reuse that id when they claim. This is the key fix against **orphaned
+sessions**: an admitted user who never claims (grace timeout, tab close) frees
+their slot with no GPU session ever created.
+
+When the **last member** leaves a slot (timeout, `session_ended`, tab close, or
+poll seeing `CLOSED`/`INACTIVE`), the server `DELETE`s its Reactor session if
+one was created (and `RQ_STOP_SESSIONS` is on) and removes the slot.
 
 **Capacity** exposed to clients is `maxSessions × usersPerSession` (total live
 members). `active` in queue messages is the current member count.
@@ -115,11 +123,6 @@ members). `active` in queue messages is the current member count.
 **`usersPerSession > 1`** is supported in the queue’s accounting today; platform
 multi-connection per session (sharing one WebRTC session across N clients) is
 still rolling out — default `1` matches current behavior.
-
-**Session creation timing:** the server creates the Reactor session at
-**admission** (when `admitted` + `sessionId` are sent), including during the
-grace window before `claim()`. If the user never claims, grace expiry reclaims
-the member and stops the session when empty.
 
 ### js-sdk requirement
 
@@ -248,17 +251,21 @@ queue.endSession();
 
 The client exposes a single `phase` you can switch on:
 
-`idle → connecting → queued → admitted → active → expired`
+`idle → connecting → queued → admitted → starting → active → expired`
 (plus `rejected` for a duplicate tab and `disconnected` for a dropped socket).
 
 | Phase | Meaning | Typical UI |
 |---|---|---|
 | `connecting` | Socket opening | spinner |
 | `queued` | In line | "Position {position} of {total}" |
-| `admitted` | Slot reserved, token ready, `graceMs` to act | "You're up — Enter" |
-| `active` | `claim()`ed; session should be running | the model |
+| `admitted` | Capacity slot reserved, `graceMs` to act. No session yet | "You're up — Enter" |
+| `starting` | `claim()`ed; server is creating the session | "Starting…" spinner |
+| `active` | `session_ready` received; `sessionId` set — attach the SDK | the model |
 | `expired` | Time elapsed / reclaimed; session stopped | "Rejoin" |
 | `rejected` | Duplicate tab; auto-retries | "Open in one tab" |
+
+`sessionId` is `null` until `active`; gate your `<ReactorProvider>` on
+`phase === "active" && sessionId`.
 
 `sessionEndsAt` (unix ms) drives countdowns: while `admitted` it's the
 admission-grace deadline ("time to enter"), while `active` it's the session
@@ -410,7 +417,8 @@ If you integrated an earlier version of this library:
 |---|---|
 | `maxConcurrent` / `RQ_MAX_CONCURRENT` | `maxSessions` / `RQ_MAX_SESSIONS` (+ optional `usersPerSession`) |
 | Client `POST /sessions` + `reportSession(id)` | Server creates session; use `q.sessionId` in `connectOptions` |
-| `session_started` client message | Removed — server sends `sessionId` on `admitted` |
+| `session_started` client message | Removed — server sends `sessionId` via `session_ready` after `claim()` |
+| Session created on admit / `sessionId` on `admitted` | Created on `claim()`; `sessionId` arrives in `session_ready` (new `starting` phase) |
 | `capacity` in wire messages | Replaces `maxConcurrent` in `admitted` / `queue_position` |
 | Hooks `onAdmit`, `onClaim`, `onExpire`, … | `onUserConnected`, `onUserEnteredSession`, `onSessionCreated`, … |
 | Server config without `model` | **`RQ_MODEL` required** (must match the model your client uses) |

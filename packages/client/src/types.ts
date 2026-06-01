@@ -6,9 +6,11 @@ export type QueuePhase =
   | "connecting"
   /** In line, not yet at the front. */
   | "queued"
-  /** At the front, slot reserved, token available — call `claim()` to enter. */
+  /** At the front, capacity slot reserved — call `claim()` to enter. No session yet. */
   | "admitted"
-  /** User claimed the slot and (typically) has a running Reactor session. */
+  /** Claimed; waiting for the server to create the session and send `session_ready`. */
+  | "starting"
+  /** Session is ready (`sessionId` set); attach with the SDK. */
   | "active"
   /** Time ran out or the slot was reclaimed by the server. */
   | "expired"

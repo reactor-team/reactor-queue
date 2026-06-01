@@ -69,21 +69,34 @@ export interface QueuePositionMessage {
 }
 
 /**
- * You reached the front and a slot is reserved for you. A `token` message
- * follows immediately. You now have until the admission grace expires to
- * `claim()`.
+ * You reached the front and a capacity slot is reserved for you. No Reactor
+ * session exists yet — the server creates it only when you `claim()`, so an
+ * abandoned grace never leaves an orphaned GPU session. You have until the
+ * admission grace expires to `claim()`.
  */
 export interface AdmittedMessage {
   type: "admitted";
   active: number;
-  /** Total live users = activeSessions * usersPerSession. */
+  /** Total live users = maxSessions * usersPerSession. */
   capacity: number;
   /** ms the client has to `claim()` before the slot is reclaimed. */
   graceMs: number;
   /** Full session budget (ms) the client receives once it `claim()`s. For countdown UI. */
   sessionDurationMs: number;
+}
+
+/**
+ * Sent after `claim()`: the server has created (or reused) the Reactor session
+ * for this member. Attach with `connect({ sessionId })`.
+ */
+export interface SessionReadyMessage {
+  type: "session_ready";
   /** Reactor session id created by the server — attach with connect({ sessionId }). */
   sessionId: string;
+  /** Full session budget (ms). */
+  sessionDurationMs: number;
+  /** Unix epoch ms when the session ends. */
+  expiresAt: number;
 }
 
 /** A freshly minted, short-lived Reactor JWT. Sent on admission and on each `request_token`. */
@@ -123,6 +136,7 @@ export interface ErrorMessage {
 export type ServerMessage =
   | QueuePositionMessage
   | AdmittedMessage
+  | SessionReadyMessage
   | TokenMessage
   | TimeWarningMessage
   | ExpiredMessage
@@ -198,16 +212,18 @@ export interface AdminQueuedUserSnapshot {
 /** One admitted member (may or may not have claimed yet). */
 export interface AdminMemberSnapshot {
   connId: string;
-  sessionId: string;
+  /** Reactor session id once claimed; null while still in grace (no session yet). */
+  sessionId: string | null;
   clientId: string | null;
   claimed: boolean;
   expiresAt: number;
   msLeft: number;
 }
 
-/** One Reactor session and its member connection ids. */
+/** One capacity slot and its member connection ids. */
 export interface AdminSessionSnapshot {
-  sessionId: string;
+  /** Reactor session id, or null while the slot is reserved but unclaimed (no GPU session yet). */
+  sessionId: string | null;
   members: string[];
   createdAt: number;
   msSinceCreated: number;
