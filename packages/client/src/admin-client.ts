@@ -33,6 +33,7 @@ export class ReactorQueueAdminClient {
   private destroyed = false;
   private state: AdminState = { ...INITIAL_ADMIN_STATE };
   private listeners = new Set<Listener>();
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: ReactorQueueAdminClientOptions) {
     this.opts = {
@@ -41,6 +42,7 @@ export class ReactorQueueAdminClient {
       party: options.party,
       password: options.password,
       autoConnect: options.autoConnect ?? false,
+      refreshIntervalMs: options.refreshIntervalMs ?? 0,
     };
     if (this.opts.autoConnect) this.connect();
   }
@@ -127,6 +129,7 @@ export class ReactorQueueAdminClient {
     switch (msg.type) {
       case "admin_ready":
         this.setState({ phase: "ready", reason: null });
+        this.startRefreshTimer();
         break;
       case "admin_snapshot":
         this.setState({ phase: "ready", snapshot: msg });
@@ -147,7 +150,23 @@ export class ReactorQueueAdminClient {
     }
   }
 
+  private startRefreshTimer(): void {
+    this.clearRefreshTimer();
+    if (this.opts.refreshIntervalMs <= 0) return;
+    this.refreshTimer = setInterval(() => {
+      if (this.state.phase === "ready") this.refresh();
+    }, this.opts.refreshIntervalMs);
+  }
+
+  private clearRefreshTimer(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+
   private teardownSocket(): void {
+    this.clearRefreshTimer();
     if (this.socket) {
       try {
         this.socket.close();

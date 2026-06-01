@@ -353,7 +353,11 @@ changes. Actions: `admin_kick_member`, `admin_close_session`, `admin_refresh`.
 ```tsx
 import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/queue/admin/react";
 
-<ReactorQueueAdminProvider host={PARTYKIT_HOST} password={yourPasswordResolver}>
+<ReactorQueueAdminProvider
+  host={PARTYKIT_HOST}
+  password={yourPasswordResolver}
+  refreshIntervalMs={10_000} // optional poll; server also pushes on every change
+>
   <YourDashboard />
 </ReactorQueueAdminProvider>
 

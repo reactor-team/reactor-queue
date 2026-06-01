@@ -61,7 +61,12 @@ export default function AdminPage() {
   }
 
   return (
-    <ReactorQueueAdminProvider host={PARTYKIT_HOST} password={password} autoConnect>
+    <ReactorQueueAdminProvider
+      host={PARTYKIT_HOST}
+      password={password}
+      autoConnect
+      refreshIntervalMs={10_000}
+    >
       <Dashboard onDisconnect={() => setConnected(false)} />
     </ReactorQueueAdminProvider>
   );
