@@ -34,7 +34,7 @@ Then:
 ```bash
 cd examples/basic
 cp .env.example .env
-# edit .env: set RQ_REACTOR_API_KEY=rk_...
+# edit .env: RQ_REACTOR_API_KEY, RQ_ADMIN_PASSWORD (for /admin), …
 pnpm dev
 ```
 
@@ -43,7 +43,7 @@ pnpm dev
 
 Both processes read this folder's `.env`: Next.js for `NEXT_PUBLIC_*`, and
 `partykit dev` loads it automatically (it prints `Loading environment variables
-from .env`) and exposes `RQ_REACTOR_API_KEY` on `room.env`.
+from .env`) and exposes server vars (`RQ_REACTOR_API_KEY`, `RQ_ADMIN_PASSWORD`, …) on `room.env`.
 
 Open http://localhost:3000. You'll see your queue position; click **Enter the
 demo** when you reach the front. Open a second browser to watch the line form
@@ -54,7 +54,7 @@ demo** when you reach the front. Open a second browser to watch the line form
 - `app/page.tsx` — the entire example: `<ReactorQueueProvider>`, a phase switch,
   the gated `<ReactorProvider getJwt={queue.getJwt}>`, and `SessionBridge`.
 - `partykit/server.ts` — `createReactorQueueServer()`, the whole queue.
-- `partykit.json` — tunables (`RQ_MODEL`, `RQ_MAX_SESSIONS`, `RQ_USERS_PER_SESSION`, `RQ_ADMIN_PASSWORD`, …).
+- `partykit.json` — non-secret tunables (`RQ_MODEL`, `RQ_MAX_SESSIONS`, …). Secrets (`RQ_REACTOR_API_KEY`, `RQ_ADMIN_PASSWORD`) live in `.env` only.
 - `app/admin/page.tsx` — live queue dashboard (kick members, force-close sessions).
 
 ## Deploy
@@ -62,7 +62,7 @@ demo** when you reach the front. Open a second browser to watch the line form
 `partykit deploy --with-vars` pushes the secrets from your local `.env`:
 
 ```bash
-pnpm deploy:party     # = partykit deploy --with-vars  (uploads RQ_REACTOR_API_KEY from .env)
+pnpm deploy:party     # = partykit deploy --with-vars  (uploads secrets from .env)
 # then set NEXT_PUBLIC_PARTYKIT_HOST to the deployed host and deploy the web app
 ```
 

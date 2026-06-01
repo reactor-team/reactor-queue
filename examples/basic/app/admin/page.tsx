@@ -35,7 +35,7 @@ export default function AdminPage() {
             </Link>
           </div>
           <p style={s.muted}>
-            Password must match <code>RQ_ADMIN_PASSWORD</code> on the PartyKit server.
+            Password must match <code>RQ_ADMIN_PASSWORD</code> in your <code>.env</code> (loaded by PartyKit).
           </p>
           <label style={s.label}>
             Admin password
