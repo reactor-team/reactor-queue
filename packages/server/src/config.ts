@@ -48,6 +48,12 @@ export interface ReactorQueueServerConfig {
    */
   stopSessionsOnExpiry?: boolean;
 
+  /**
+   * Password for admin dashboard connections (`rqAdmin=1` on the WebSocket URL).
+   * Env: `RQ_ADMIN_PASSWORD`. When unset, admin mode is disabled.
+   */
+  adminPassword?: string;
+
   /** Optional lifecycle hooks for logging / metrics. Not configurable via env. */
   hooks?: ReactorQueueServerHooks;
 }
@@ -80,6 +86,8 @@ export interface ResolvedConfig {
   hooks: ReactorQueueServerHooks;
   /** Total live users = maxSessions * usersPerSession. */
   capacity: number;
+  /** When set, admin WebSocket connections may authenticate with this password. */
+  adminPassword: string | null;
 }
 
 const DEFAULT_COORDINATOR_URL = "https://api.reactor.inc";
@@ -190,6 +198,7 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
       envBool(env, "RQ_STOP_SESSIONS") ?? config.stopSessionsOnExpiry ?? true,
     hooks: config.hooks ?? {},
     capacity: maxSessions * usersPerSession,
+    adminPassword: envStr(env, "RQ_ADMIN_PASSWORD") ?? config.adminPassword ?? null,
   };
 }
 

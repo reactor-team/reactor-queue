@@ -16,6 +16,9 @@ export const DEFAULT_ROOM = "reactor-queue";
 /** Query-string key used to carry the stable per-browser id on connect. */
 export const CLIENT_ID_QUERY_KEY = "rqClientId";
 
+/** Set to `1` on the WebSocket URL to open an admin connection (not queued). */
+export const ADMIN_MODE_QUERY_KEY = "rqAdmin";
+
 /**
  * Default tunables. Every one of these is overridable from server config and/or
  * environment variables (see `@reactor-team/queue-server`).
@@ -163,6 +166,122 @@ export type ClientMessage =
   | LeaveMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Admin mode (server → admin client)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Read-only server tunables included in every admin snapshot. */
+export interface AdminConfigSnapshot {
+  maxSessions: number;
+  usersPerSession: number;
+  capacity: number;
+  model: string;
+  webrtcVersion: string;
+  sessionDurationMs: number;
+  admissionGraceMs: number;
+  warningBeforeMs: number;
+  tokenTtlSeconds: number;
+  heartbeatStaleMs: number;
+  pollIntervalMs: number;
+  coordinatorUrl: string;
+  apiVersion: number;
+  stopSessionsOnExpiry: boolean;
+}
+
+/** One person waiting in the FIFO queue. */
+export interface AdminQueuedUserSnapshot {
+  connId: string;
+  /** 1-based position in line. */
+  position: number;
+  clientId: string | null;
+}
+
+/** One admitted member (may or may not have claimed yet). */
+export interface AdminMemberSnapshot {
+  connId: string;
+  sessionId: string;
+  clientId: string | null;
+  claimed: boolean;
+  expiresAt: number;
+  msLeft: number;
+}
+
+/** One Reactor session and its member connection ids. */
+export interface AdminSessionSnapshot {
+  sessionId: string;
+  members: string[];
+  createdAt: number;
+  msSinceCreated: number;
+}
+
+/** Full room state pushed to authenticated admin connections. */
+export interface AdminSnapshotMessage {
+  type: "admin_snapshot";
+  at: number;
+  activeCount: number;
+  sessionCount: number;
+  config: AdminConfigSnapshot;
+  queue: AdminQueuedUserSnapshot[];
+  sessions: AdminSessionSnapshot[];
+  members: AdminMemberSnapshot[];
+}
+
+/** Admin WebSocket authenticated; snapshots follow on changes. */
+export interface AdminReadyMessage {
+  type: "admin_ready";
+}
+
+export interface AdminRejectedMessage {
+  type: "admin_rejected";
+  reason: "admin_disabled" | "invalid_password" | "auth_required";
+}
+
+export interface AdminActionResultMessage {
+  type: "admin_action_result";
+  action: "kick_member" | "close_session";
+  ok: boolean;
+  message?: string;
+}
+
+export type AdminServerMessage =
+  | AdminReadyMessage
+  | AdminRejectedMessage
+  | AdminSnapshotMessage
+  | AdminActionResultMessage;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin mode (admin client → server)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** First message on an admin connection; password must match `RQ_ADMIN_PASSWORD`. */
+export interface AdminAuthMessage {
+  type: "admin_auth";
+  password: string;
+}
+
+/** Remove a member from their session and free capacity (same as forced expiry). */
+export interface AdminKickMemberMessage {
+  type: "admin_kick_member";
+  connId: string;
+}
+
+/** Stop the Reactor session and evict all members. */
+export interface AdminCloseSessionMessage {
+  type: "admin_close_session";
+  sessionId: string;
+}
+
+/** Request a fresh snapshot (also sent automatically on room changes). */
+export interface AdminRefreshMessage {
+  type: "admin_refresh";
+}
+
+export type AdminClientMessage =
+  | AdminAuthMessage
+  | AdminKickMemberMessage
+  | AdminCloseSessionMessage
+  | AdminRefreshMessage;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -180,7 +299,31 @@ export function parseServerMessage(raw: string): ServerMessage | null {
 export function parseClientMessage(raw: string): ClientMessage | null {
   try {
     const msg = JSON.parse(raw) as ClientMessage;
-    return typeof msg?.type === "string" ? msg : null;
+    if (typeof msg?.type !== "string") return null;
+    if (msg.type.startsWith("admin_")) return null;
+    return msg;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse an admin client message. Returns null on garbage or non-admin types. */
+export function parseAdminClientMessage(raw: string): AdminClientMessage | null {
+  try {
+    const msg = JSON.parse(raw) as AdminClientMessage;
+    if (typeof msg?.type !== "string" || !msg.type.startsWith("admin_")) return null;
+    return msg;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a server message sent to an admin connection. */
+export function parseAdminServerMessage(raw: string): AdminServerMessage | null {
+  try {
+    const msg = JSON.parse(raw) as AdminServerMessage;
+    if (typeof msg?.type !== "string" || !msg.type.startsWith("admin_")) return null;
+    return msg;
   } catch {
     return null;
   }

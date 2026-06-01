@@ -1,9 +1,13 @@
 import type * as Party from "partykit/server";
 import {
+  ADMIN_MODE_QUERY_KEY,
   CLIENT_ID_QUERY_KEY,
+  parseAdminClientMessage,
   parseClientMessage,
+  type AdminServerMessage,
   type ServerMessage,
 } from "@reactor-team/queue-protocol";
+import { buildAdminSnapshot } from "./admin-snapshot";
 import {
   resolveConfig,
   type ReactorQueueServerConfig,
@@ -54,6 +58,8 @@ export function createReactorQueueServer(
     private coordinator: CoordinatorClient | null = null;
     private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
     private broadcastPending = false;
+    private adminBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+    private adminBroadcastPending = false;
 
     constructor(readonly room: Party.Room) {}
 
@@ -174,11 +180,115 @@ export function createReactorQueueServer(
       for (const conn of this.connectionsById(connId)) this.send(conn, msg);
     }
 
+    private sendAdmin(conn: Party.Connection, msg: AdminServerMessage) {
+      const ws = conn as { readyState?: number };
+      if (ws.readyState !== undefined && ws.readyState !== 1 /* OPEN */) return;
+      try {
+        conn.send(JSON.stringify(msg));
+      } catch {
+        /* connection closed */
+      }
+    }
+
+    private sendAdminTo(connId: string, msg: AdminServerMessage) {
+      for (const conn of this.connectionsById(connId)) this.sendAdmin(conn, msg);
+    }
+
+    private adminKey(connId: string): string {
+      return `admin:${connId}`;
+    }
+
+    private async getAdminStatus(
+      connId: string
+    ): Promise<"pending" | "active" | undefined> {
+      return this.room.storage.get<"pending" | "active">(this.adminKey(connId));
+    }
+
+    private async resolveClientIdForConn(connId: string): Promise<string | null> {
+      return (await this.room.storage.get<string>(`conn:${connId}`)) ?? null;
+    }
+
+    private async buildSnapshot() {
+      return buildAdminSnapshot({
+        config: this.config,
+        queue: await this.getQueue(),
+        sessions: await this.getAllSessionRecords(),
+        members: await this.getAllMembers(),
+        resolveClientId: (connId) => this.resolveClientIdForConn(connId),
+      });
+    }
+
+    private async getActiveAdminConnIds(): Promise<string[]> {
+      const all = await this.room.storage.list<"pending" | "active">({ prefix: "admin:" });
+      const out: string[] = [];
+      for (const [key, status] of all) {
+        if (status === "active") out.push(key.replace("admin:", ""));
+      }
+      return out;
+    }
+
+    private scheduleAdminBroadcast(): void {
+      this.adminBroadcastPending = true;
+      if (this.adminBroadcastTimer) return;
+      this.adminBroadcastTimer = setTimeout(() => {
+        this.adminBroadcastTimer = null;
+        if (!this.adminBroadcastPending) return;
+        this.adminBroadcastPending = false;
+        void this.broadcastAdminSnapshots().catch((err) =>
+          this.reportError("adminBroadcast", err)
+        );
+      }, 100);
+    }
+
+    private async broadcastAdminSnapshots(): Promise<void> {
+      const admins = await this.getActiveAdminConnIds();
+      if (admins.length === 0) return;
+      const snapshot = await this.buildSnapshot();
+      for (const connId of admins) this.sendAdminTo(connId, snapshot);
+    }
+
+    private async adminKickMember(connId: string): Promise<{ ok: boolean; message?: string }> {
+      const member = await this.getMember(connId);
+      if (!member) return { ok: false, message: "member_not_found" };
+      await this.releaseMember(connId, member, "server", { notify: true, stop: true });
+      await this.tryAdmitNext();
+      this.scheduleAdminBroadcast();
+      return { ok: true };
+    }
+
+    private async adminCloseSession(sessionId: string): Promise<{ ok: boolean; message?: string }> {
+      const record = await this.getSessionRecord(sessionId);
+      if (!record) return { ok: false, message: "session_not_found" };
+      for (const connId of [...record.members]) {
+        const member = await this.getMember(connId);
+        if (member) {
+          await this.releaseMember(connId, member, "server", { notify: true, stop: false });
+        }
+      }
+      await this.closeSessionRecord(sessionId, "admin", true);
+      await this.tryAdmitNext();
+      this.scheduleAdminBroadcast();
+      return { ok: true };
+    }
+
     // ── connection lifecycle ────────────────────────────────────────────────
 
     async onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
       try {
-        const clientId = new URL(ctx.request.url).searchParams.get(CLIENT_ID_QUERY_KEY);
+        const url = new URL(ctx.request.url);
+        const isAdmin = url.searchParams.get(ADMIN_MODE_QUERY_KEY) === "1";
+
+        if (isAdmin) {
+          if (!this.config.adminPassword) {
+            this.sendAdmin(conn, { type: "admin_rejected", reason: "admin_disabled" });
+            conn.close(1008, "admin_disabled");
+            return;
+          }
+          await this.room.storage.put(this.adminKey(conn.id), "pending");
+          return;
+        }
+
+        const clientId = url.searchParams.get(CLIENT_ID_QUERY_KEY);
         if (clientId) {
           const entry = await this.getClientEntry(clientId);
           if (entry && entry.connId !== conn.id) {
@@ -201,6 +311,7 @@ export function createReactorQueueServer(
         await this.setQueue(queue);
         this.config.hooks.onUserConnected?.(conn.id);
         await this.tryAdmitNext();
+        this.scheduleAdminBroadcast();
       } catch (err) {
         this.reportError("onConnect", err);
         try {
@@ -214,6 +325,12 @@ export function createReactorQueueServer(
 
     async onClose(conn: Party.Connection) {
       try {
+        const adminStatus = await this.getAdminStatus(conn.id);
+        if (adminStatus) {
+          await this.room.storage.delete(this.adminKey(conn.id));
+          return;
+        }
+
         const clientId = await this.room.storage.get<string>(`conn:${conn.id}`);
         if (clientId) {
           const entry = await this.getClientEntry(clientId);
@@ -229,6 +346,7 @@ export function createReactorQueueServer(
           queue.splice(idx, 1);
           await this.setQueue(queue);
           this.scheduleBroadcast();
+          this.scheduleAdminBroadcast();
         }
 
         const member = await this.getMember(conn.id);
@@ -244,6 +362,66 @@ export function createReactorQueueServer(
     }
 
     async onMessage(raw: string, sender: Party.Connection) {
+      const adminStatus = await this.getAdminStatus(sender.id);
+      if (adminStatus) {
+        const adminMsg = parseAdminClientMessage(raw);
+        try {
+          if (adminStatus === "pending") {
+            if (adminMsg?.type !== "admin_auth") {
+              this.sendAdmin(sender, { type: "admin_rejected", reason: "auth_required" });
+              sender.close(1008, "auth_required");
+              return;
+            }
+            if (adminMsg.password !== this.config.adminPassword) {
+              this.sendAdmin(sender, { type: "admin_rejected", reason: "invalid_password" });
+              sender.close(1008, "invalid_password");
+              await this.room.storage.delete(this.adminKey(sender.id));
+              return;
+            }
+            await this.room.storage.put(this.adminKey(sender.id), "active");
+            this.sendAdmin(sender, { type: "admin_ready" });
+            this.sendAdmin(sender, await this.buildSnapshot());
+            return;
+          }
+
+          if (!adminMsg) return;
+
+          switch (adminMsg.type) {
+            case "admin_refresh": {
+              this.sendAdmin(sender, await this.buildSnapshot());
+              break;
+            }
+            case "admin_kick_member": {
+              const result = await this.adminKickMember(adminMsg.connId);
+              this.sendAdmin(sender, {
+                type: "admin_action_result",
+                action: "kick_member",
+                ok: result.ok,
+                message: result.message,
+              });
+              if (result.ok) this.sendAdmin(sender, await this.buildSnapshot());
+              break;
+            }
+            case "admin_close_session": {
+              const result = await this.adminCloseSession(adminMsg.sessionId);
+              this.sendAdmin(sender, {
+                type: "admin_action_result",
+                action: "close_session",
+                ok: result.ok,
+                message: result.message,
+              });
+              if (result.ok) this.sendAdmin(sender, await this.buildSnapshot());
+              break;
+            }
+            case "admin_auth":
+              break;
+          }
+        } catch (err) {
+          this.reportError(`onMessage:admin:${adminMsg?.type ?? "unknown"}`, err);
+        }
+        return;
+      }
+
       const msg = parseClientMessage(raw);
       if (!msg) return;
 
@@ -389,6 +567,7 @@ export function createReactorQueueServer(
 
         if (freedAny) await this.tryAdmitNext();
         await this.broadcastPositions();
+        this.scheduleAdminBroadcast();
       } catch (err) {
         this.reportError("onAlarm", err);
       } finally {
@@ -502,6 +681,7 @@ export function createReactorQueueServer(
       if (queueChanged) await this.setQueue(queue);
       if (admittedAny) await this.scheduleNextAlarm();
       this.scheduleBroadcast();
+      if (queueChanged || admittedAny) this.scheduleAdminBroadcast();
     }
 
     private async mintAndSend(conn: Party.Connection): Promise<void> {
@@ -557,6 +737,7 @@ export function createReactorQueueServer(
       }
       await this.deleteSessionRecord(sessionId);
       this.config.hooks.onSessionClosed?.(sessionId, reason);
+      this.scheduleAdminBroadcast();
     }
 
     // ── position broadcasting (coalesced) ─────────────────────────────────────

@@ -38,7 +38,7 @@ cp .env.example .env
 pnpm dev
 ```
 
-- Next.js → http://localhost:3000
+- Next.js → http://localhost:3000 (demo) · http://localhost:3000/admin (dashboard)
 - PartyKit → http://127.0.0.1:1999
 
 Both processes read this folder's `.env`: Next.js for `NEXT_PUBLIC_*`, and
@@ -54,7 +54,8 @@ demo** when you reach the front. Open a second browser to watch the line form
 - `app/page.tsx` — the entire example: `<ReactorQueueProvider>`, a phase switch,
   the gated `<ReactorProvider getJwt={queue.getJwt}>`, and `SessionBridge`.
 - `partykit/server.ts` — `createReactorQueueServer()`, the whole queue.
-- `partykit.json` — tunables (`RQ_MODEL`, `RQ_MAX_SESSIONS`, `RQ_USERS_PER_SESSION`, …).
+- `partykit.json` — tunables (`RQ_MODEL`, `RQ_MAX_SESSIONS`, `RQ_USERS_PER_SESSION`, `RQ_ADMIN_PASSWORD`, …).
+- `app/admin/page.tsx` — live queue dashboard (kick members, force-close sessions).
 
 ## Deploy
 

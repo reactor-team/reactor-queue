@@ -78,6 +78,11 @@ function Gate() {
       return (
         <Center>
           <Card>
+            <p style={{ ...s.muted, marginBottom: 12 }}>
+              <a href="/admin" style={{ color: "#d9b15e", fontSize: 13 }}>
+                Queue admin →
+              </a>
+            </p>
             <Label>You're in line</Label>
             <div style={s.bigNum}>#{q.position}</div>
             <p style={s.muted}>

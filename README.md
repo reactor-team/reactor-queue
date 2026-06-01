@@ -321,6 +321,7 @@ All values resolve as **default → `createReactorQueueServer({...})` → env va
 | `RQ_COORDINATOR_URL` | `coordinatorUrl` | `https://api.reactor.inc` | Reactor API base URL |
 | `RQ_API_VERSION` | `apiVersion` | `1` | `Reactor-API-Version` header |
 | `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry |
+| `RQ_ADMIN_PASSWORD` | `adminPassword` | — (off) | Password for admin dashboard connections |
 
 `createReactorQueueServer` also accepts optional **hooks** (not env-configurable):
 
@@ -336,6 +337,35 @@ All values resolve as **default → `createReactorQueueServer({...})` → env va
 Debug while developing: `curl http://127.0.0.1:1999/parties/main/<room>` returns
 `maxSessions`, `usersPerSession`, `capacity`, `queueLength`, `activeCount`, and
 per-session `members` lists.
+
+## Admin mode
+
+Operators can watch the room and kick users without joining the queue. Set
+`RQ_ADMIN_PASSWORD` (or `adminPassword` in `createReactorQueueServer`). When unset,
+admin connections are rejected.
+
+Connect with `rqAdmin=1` on the WebSocket URL, then send `{ type: "admin_auth", password }`.
+The server replies with `admin_ready` and pushes `admin_snapshot` whenever the room
+changes. Actions: `admin_kick_member`, `admin_close_session`, `admin_refresh`.
+
+**React** — shell only; you build the UI:
+
+```tsx
+import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/queue/admin/react";
+
+<ReactorQueueAdminProvider host={PARTYKIT_HOST} password={yourPasswordResolver}>
+  <YourDashboard />
+</ReactorQueueAdminProvider>
+
+function YourDashboard() {
+  const { phase, snapshot, kickMember, closeSession } = useReactorQueueAdmin();
+  // snapshot.config, snapshot.queue, snapshot.members, snapshot.sessions
+}
+```
+
+**Vanilla** — `@reactor-team/queue/admin` exports `ReactorQueueAdminClient`.
+
+See [`examples/basic/app/admin`](./examples/basic/app/admin) for a full dashboard.
 
 ## Configuration (client)
 
