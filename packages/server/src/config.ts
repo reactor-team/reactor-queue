@@ -1,5 +1,25 @@
 import { DEFAULTS, DEFAULT_ROOM } from "@reactor-team/queue-protocol";
-import type { SessionSource } from "./session-source";
+
+/** Passed to a custom {@link ReactorQueueServerConfig.acquireSession}. */
+export interface AcquireSessionContext {
+  /** The configured model name. */
+  model: string;
+}
+
+/** Passed to a custom {@link ReactorQueueServerConfig.releaseSession}. */
+export interface ReleaseSessionContext {
+  /** The Reactor session the user was in. */
+  sessionId: string;
+  /** The connection id of the user who left. */
+  userId: string;
+  /** Why they left: `timeout`, `grace_timeout`, or `server`. */
+  reason: string;
+  /** True if they were the last member — the session is now empty. */
+  lastMember: boolean;
+}
+
+export type AcquireSessionFn = (ctx: AcquireSessionContext) => Promise<string>;
+export type ReleaseSessionFn = (ctx: ReleaseSessionContext) => Promise<void>;
 
 /**
  * Operator-facing configuration for the queue server.
@@ -61,22 +81,23 @@ export interface ReactorQueueServerConfig {
   allowDuplicateConnections?: boolean;
 
   /**
-   * Lease sessions from a pre-provisioned pool instead of creating them.
-   * When set, `claim()` calls `acquire()` and teardown calls `release()` instead
-   * of `POST`/`DELETE /sessions`. Use for "robot already in the room" setups.
-   * Not configurable via env (pass an implementation); for the built-in HTTP
-   * pool, set `RQ_SESSION_POOL_URL` instead. Code config wins over env.
+   * Override how a session id is obtained when an admitted user `claim()`s.
+   * Default: create one via the Reactor API (`POST /sessions`). Override to,
+   * e.g., lease a pre-provisioned session that already has a backend agent
+   * ("robot") connected. Called once per session (the first member's claim).
+   * Not configurable via env — pass a function.
    */
-  sessionSource?: SessionSource;
+  acquireSession?: AcquireSessionFn;
 
   /**
-   * URL of an HTTP session pool. When set (and no `sessionSource` is passed in
-   * code), the server leases sessions from it via {@link HttpSessionPool}.
-   * Env: `RQ_SESSION_POOL_URL`. Auth: `RQ_SESSION_POOL_TOKEN` (Bearer).
+   * Called when a user **leaves** a session (timeout, disconnect, end, or kick),
+   * with their `userId` and whether they were the `lastMember`. Default: when
+   * the last member leaves, delete the session via the Reactor API
+   * (`DELETE /sessions/{id}`, subject to `stopSessionsOnExpiry`). Override to
+   * keep the session alive and just react to the departure (e.g. reset a robot).
+   * Not configurable via env — pass a function.
    */
-  sessionPoolUrl?: string;
-  /** Bearer token for the HTTP session pool. Env: `RQ_SESSION_POOL_TOKEN`. */
-  sessionPoolToken?: string;
+  releaseSession?: ReleaseSessionFn;
 
   /** Optional lifecycle hooks for logging / metrics. Not configurable via env. */
   hooks?: ReactorQueueServerHooks;
@@ -113,12 +134,10 @@ export interface ResolvedConfig {
   adminPassword: string | null;
   /** When true, the duplicate-tab (same `clientId`) rejection is disabled. */
   allowDuplicateConnections: boolean;
-  /** Code-provided session source (wins over the HTTP pool), or null. */
-  sessionSource: SessionSource | null;
-  /** HTTP session pool URL (used when no code `sessionSource`), or null. */
-  sessionPoolUrl: string | null;
-  /** Bearer token for the HTTP session pool, or null. */
-  sessionPoolToken: string | null;
+  /** Custom session acquisition, or null to create via the Reactor API. */
+  acquireSession: AcquireSessionFn | null;
+  /** Custom user-left handler, or null to delete via the Reactor API on last member. */
+  releaseSession: ReleaseSessionFn | null;
 }
 
 const DEFAULT_COORDINATOR_URL = "https://api.reactor.inc";
@@ -229,9 +248,8 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
       envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ??
       config.allowDuplicateConnections ??
       false,
-    sessionSource: config.sessionSource ?? null,
-    sessionPoolUrl: envStr(env, "RQ_SESSION_POOL_URL") ?? config.sessionPoolUrl ?? null,
-    sessionPoolToken: envStr(env, "RQ_SESSION_POOL_TOKEN") ?? config.sessionPoolToken ?? null,
+    acquireSession: config.acquireSession ?? null,
+    releaseSession: config.releaseSession ?? null,
   };
 }
 

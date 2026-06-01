@@ -13,8 +13,8 @@ import {
   type ReactorQueueServerConfig,
   type ResolvedConfig,
 } from "./config";
+import type { ReleaseSessionContext } from "./config";
 import { CoordinatorClient } from "./coordinator";
-import { HttpSessionPool, type SessionSource } from "./session-source";
 
 /** Per admitted member. Lives in durable storage under `member:<connId>`. */
 interface MemberData {
@@ -65,7 +65,6 @@ export function createReactorQueueServer(
 
     private cfg: ResolvedConfig | null = null;
     private coordinator: CoordinatorClient | null = null;
-    private sessionSrcResolved: SessionSource | null | undefined = undefined;
     // Coalescing flags. Set during a handler, flushed once before it returns —
     // never across the hibernation boundary, so no in-memory timer is needed.
     private positionsDirty = false;
@@ -93,24 +92,31 @@ export function createReactorQueueServer(
     }
 
     /**
-     * The session source: a code-provided pool, else the HTTP pool from
-     * `RQ_SESSION_POOL_URL`, else `null` (meaning "create/stop via Coordinator").
+     * Obtain a session id for a slot's first claim. Uses the configured
+     * `acquireSession` override, or creates one via the Reactor API by default.
      */
-    private get sessionSource(): SessionSource | null {
-      if (this.sessionSrcResolved === undefined) {
-        const c = this.config;
-        if (c.sessionSource) {
-          this.sessionSrcResolved = c.sessionSource;
-        } else if (c.sessionPoolUrl) {
-          this.sessionSrcResolved = new HttpSessionPool({
-            url: c.sessionPoolUrl,
-            token: c.sessionPoolToken,
-          });
-        } else {
-          this.sessionSrcResolved = null;
+    private async runAcquire(model: string): Promise<string> {
+      if (this.config.acquireSession) return this.config.acquireSession({ model });
+      return this.api.createSession({ model, webrtcVersion: this.config.webrtcVersion });
+    }
+
+    /**
+     * A user left a session. Uses the configured `releaseSession` override, or by
+     * default deletes the session via the Reactor API once the last member leaves
+     * (subject to `stopSessionsOnExpiry`). Never throws into the caller.
+     */
+    private async runRelease(ctx: ReleaseSessionContext): Promise<void> {
+      try {
+        if (this.config.releaseSession) {
+          await this.config.releaseSession(ctx);
+          return;
         }
+        if (ctx.lastMember && this.config.stopSessionsOnExpiry) {
+          await this.api.stopSession(ctx.sessionId, `queue: ${ctx.reason}`);
+        }
+      } catch (err) {
+        this.reportError("releaseSession", err);
       }
-      return this.sessionSrcResolved;
     }
 
     private reportError(where: string, error: unknown) {
@@ -321,7 +327,7 @@ export function createReactorQueueServer(
     private async adminKickMember(connId: string): Promise<{ ok: boolean; message?: string }> {
       const member = await this.getMember(connId);
       if (!member) return { ok: false, message: "member_not_found" };
-      await this.releaseMember(connId, member, "server", { notify: true, stop: true });
+      await this.releaseMember(connId, member, "server", { notify: true });
       await this.tryAdmitNext();
       this.scheduleAdminBroadcast();
       return { ok: true };
@@ -346,13 +352,21 @@ export function createReactorQueueServer(
     private async adminCloseSession(sessionId: string): Promise<{ ok: boolean; message?: string }> {
       const slot = await this.findSlotBySessionId(sessionId);
       if (!slot) return { ok: false, message: "session_not_found" };
-      for (const connId of [...slot.members]) {
-        const member = await this.getMember(connId);
-        if (member) {
-          await this.releaseMember(connId, member, "server", { notify: true, stop: false });
+
+      const members = [...slot.members];
+      if (members.length === 0) {
+        // Orphan slot (session but no members): release + drop the record.
+        await this.runRelease({ sessionId, userId: "", reason: "server", lastMember: true });
+        await this.deleteSlot(slot.slotId);
+        this.config.hooks.onSessionClosed?.(sessionId, "server");
+      } else {
+        // Releasing members one by one ends the session on the last one.
+        for (const connId of members) {
+          const member = await this.getMember(connId);
+          if (member) await this.releaseMember(connId, member, "server", { notify: true });
         }
       }
-      await this.closeSlot(slot.slotId, "admin", true);
+
       await this.tryAdmitNext();
       this.scheduleAdminBroadcast();
       return { ok: true };
@@ -541,10 +555,7 @@ export function createReactorQueueServer(
           case "session_ended": {
             const member = await this.getMember(sender.id);
             if (member) {
-              await this.releaseMember(sender.id, member, "server", {
-                notify: false,
-                stop: false,
-              });
+              await this.releaseMember(sender.id, member, "server", { notify: false });
               await this.tryAdmitNext();
             }
             break;
@@ -631,16 +642,14 @@ export function createReactorQueueServer(
 
           const state = await this.api.getSessionState(slot.sessionId);
           if (CoordinatorClient.isTerminal(state)) {
+            // Session already ended on the platform; releasing each member empties
+            // and deletes the slot. The default release's DELETE is a no-op (404).
             for (const connId of [...slot.members]) {
               const member = await this.getMember(connId);
               if (member) {
-                await this.releaseMember(connId, member, "server", {
-                  notify: true,
-                  stop: false,
-                });
+                await this.releaseMember(connId, member, "server", { notify: true });
               }
             }
-            await this.closeSlot(slot.slotId, state ?? "CLOSED", false);
             freedAny = true;
           } else {
             await this.setSlot({ ...slot, lastPollAt: now });
@@ -772,18 +781,10 @@ export function createReactorQueueServer(
 
       let sessionId = slot.sessionId;
       if (!sessionId) {
-        const source = this.sessionSource;
         try {
-          // Lease from a pre-provisioned pool (robot already in the session), or
-          // create a fresh session if no pool is configured.
-          sessionId = source
-            ? await source.acquire({ model: this.config.model })
-            : await this.api.createSession({
-                model: this.config.model,
-                webrtcVersion: this.config.webrtcVersion,
-              });
+          sessionId = await this.runAcquire(this.config.model);
         } catch (err) {
-          this.reportError(source ? "sessionSource.acquire" : "createSession", err);
+          this.reportError("acquireSession", err);
           this.sendTo(connId, { type: "error", message: "session_create_failed" });
           return;
         }
@@ -822,14 +823,17 @@ export function createReactorQueueServer(
     }
 
     /**
-     * Remove a member from its slot. When the slot is empty, stop its Reactor
-     * session (if one was ever created) and fire `onSessionClosed`.
+     * Remove a member from its slot. If the slot has a session, fire the
+     * `release` callback (a user left) with `lastMember`; the default deletes the
+     * session when the last member leaves. When the slot empties, delete its
+     * record and fire `onSessionClosed`. A slot whose session was never created
+     * (abandoned grace) just disappears — no orphan, no release.
      */
     private async releaseMember(
       connId: string,
       data: MemberData,
       reason: "timeout" | "grace_timeout" | "server",
-      opts: { notify: boolean; stop?: boolean }
+      opts: { notify: boolean }
     ): Promise<void> {
       if (opts.notify) {
         this.sendTo(connId, { type: "expired", reason });
@@ -838,48 +842,27 @@ export function createReactorQueueServer(
       const slot = await this.getSlot(data.slotId);
       if (slot) {
         const nextMembers = slot.members.filter((id) => id !== connId);
-        if (nextMembers.length === 0) {
-          const shouldStop = (opts.stop ?? true) && this.config.stopSessionsOnExpiry;
-          await this.closeSlot(slot.slotId, reason, shouldStop);
+        const lastMember = nextMembers.length === 0;
+
+        if (slot.sessionId) {
+          await this.runRelease({
+            sessionId: slot.sessionId,
+            userId: connId,
+            reason,
+            lastMember,
+          });
+        }
+
+        if (lastMember) {
+          await this.deleteSlot(slot.slotId);
+          if (slot.sessionId) this.config.hooks.onSessionClosed?.(slot.sessionId, reason);
+          this.scheduleAdminBroadcast();
         } else {
           await this.setSlot({ ...slot, members: nextMembers });
         }
       }
 
       await this.deleteMember(connId);
-    }
-
-    /**
-     * Tear down a slot: stop its Reactor session if one exists (and `stop`),
-     * delete the record, fire `onSessionClosed`. A slot whose session was never
-     * created (abandoned grace) closes with nothing to stop — no orphan.
-     */
-    private async closeSlot(slotId: string, reason: string, stop: boolean): Promise<void> {
-      const slot = await this.getSlot(slotId);
-      const sessionId = slot?.sessionId ?? null;
-      if (sessionId) {
-        const source = this.sessionSource;
-        if (source) {
-          // Pooled: always hand the session back so the pool can recycle it
-          // (e.g. reset and re-attach a robot) — `stop` doesn't apply.
-          try {
-            await source.release(sessionId, reason);
-          } catch (err) {
-            this.reportError("sessionSource.release", err);
-          }
-        } else if (stop) {
-          // `stop` already folds in `stopSessionsOnExpiry` at the call site;
-          // admin force-close passes stop=true to override it.
-          try {
-            await this.api.stopSession(sessionId, `queue: ${reason}`);
-          } catch (err) {
-            this.reportError("stopSession", err);
-          }
-        }
-      }
-      await this.deleteSlot(slotId);
-      if (sessionId) this.config.hooks.onSessionClosed?.(sessionId, reason);
-      this.scheduleAdminBroadcast();
     }
 
     // ── broadcasting (coalesced, hibernation-safe) ────────────────────────────

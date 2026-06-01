@@ -189,8 +189,8 @@ export interface AdminConfigSnapshot {
   apiVersion: number;
   stopSessionsOnExpiry: boolean;
   allowDuplicateConnections: boolean;
-  /** "create" = queue creates sessions; "pool" = leased from a pre-provisioned pool. */
-  sessionSource: "create" | "pool";
+  /** "default" = queue creates/stops sessions; "custom" = acquire/release overridden. */
+  sessionSource: "default" | "custom";
 }
 
 /** One person waiting in the FIFO queue. */
