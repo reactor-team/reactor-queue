@@ -116,6 +116,9 @@ export class CoordinatorClient {
       },
       body: JSON.stringify({
         model: { name: opts.model },
+        // Identifies the caller to the Coordinator for telemetry only; not the
+        // package version. Left as a fixed marker for the queue server rather
+        // than wired to package.json — bump by hand if the contract changes.
         client_info: {
           sdk_version: "0.1.0",
           sdk_type: "js",

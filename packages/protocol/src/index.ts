@@ -120,7 +120,7 @@ export interface ExpiredMessage {
 /** You were refused entry. */
 export interface RejectedMessage {
   type: "rejected";
-  reason: "already_connected" | "server_error" | string;
+  reason: "already_connected" | "server_error" | "forbidden_origin" | string;
 }
 
 /** A non-fatal error (e.g. token mint failed); the client may retry. */
@@ -236,7 +236,7 @@ export interface AdminReadyMessage {
 
 export interface AdminRejectedMessage {
   type: "admin_rejected";
-  reason: "admin_disabled" | "invalid_password" | "auth_required";
+  reason: "admin_disabled" | "invalid_password" | "auth_required" | "forbidden_origin";
 }
 
 export interface AdminActionResultMessage {

@@ -370,10 +370,31 @@ export function createReactorQueueServer(
 
     // ── connection lifecycle ────────────────────────────────────────────────
 
+    /**
+     * Enforce the configured cross-origin allow-list. Empty list = allow all
+     * (opt-in). A `"*"` entry allows everything, including connections with no
+     * `Origin` header. Otherwise the browser's `Origin` must match exactly.
+     */
+    private isOriginAllowed(origin: string | null): boolean {
+      const allowed = this.config.allowedOrigins;
+      if (allowed.length === 0 || allowed.includes("*")) return true;
+      return origin !== null && allowed.includes(origin);
+    }
+
     async onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
       try {
         const url = new URL(ctx.request.url);
         const isAdmin = url.searchParams.get(ADMIN_MODE_QUERY_KEY) === "1";
+
+        if (!this.isOriginAllowed(ctx.request.headers.get("origin"))) {
+          if (isAdmin) {
+            this.sendAdmin(conn, { type: "admin_rejected", reason: "forbidden_origin" });
+          } else {
+            this.send(conn, { type: "rejected", reason: "forbidden_origin" });
+          }
+          conn.close(1008, "forbidden_origin");
+          return;
+        }
 
         if (isAdmin) {
           if (!this.config.adminPassword) {
@@ -566,41 +587,6 @@ export function createReactorQueueServer(
         this.reportError(`onMessage:${msg.type}`, err);
       }
       await this.flushBroadcasts();
-    }
-
-    async onRequest(_req: Party.Request) {
-      const queueLength = await this.getQueueCount();
-      const slots = await this.getAllSlots();
-      const activeCount = await this.getActiveMemberCount();
-      const createdSessions = [...slots].filter(([, s]) => s.sessionId).length;
-      const c = this.config;
-      return new Response(
-        JSON.stringify(
-          {
-            maxSessions: c.maxSessions,
-            usersPerSession: c.usersPerSession,
-            capacity: c.capacity,
-            sessionDurationMs: c.sessionDurationMs,
-            admissionGraceMs: c.admissionGraceMs,
-            model: c.model,
-            tokenTtlSeconds: c.tokenTtlSeconds,
-            pollIntervalMs: c.pollIntervalMs,
-            queueLength,
-            activeCount,
-            slotCount: slots.size,
-            sessionCount: createdSessions,
-            slots: [...slots].map(([, rec]) => ({
-              slotId: rec.slotId,
-              sessionId: rec.sessionId,
-              members: rec.members,
-              msSinceCreated: Date.now() - rec.createdAt,
-            })),
-          },
-          null,
-          2
-        ),
-        { headers: { "content-type": "application/json" } }
-      );
     }
 
     // ── alarm: warnings, expiry, and session reconciliation ──────────────────

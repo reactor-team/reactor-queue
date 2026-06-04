@@ -317,23 +317,24 @@ autoConnect>` connects on mount and disconnects on cleanup; React StrictMode
 All values resolve as **default → `createReactorQueueServer({...})` → env var**
 (env wins, for redeploy-free tuning). The API key must come from a secret.
 
-| Env var                          | Config key                  | Default                   | Purpose                                                                                     |
-| -------------------------------- | --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | Mints JWTs; creates/stops sessions                                                          |
-| `RQ_MODEL`                       | `model`                     | — (**required**)          | Model for `POST /sessions`                                                                  |
-| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | Concurrent Reactor sessions (GPU ceiling)                                                   |
-| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | Members per session (fill-in before create)                                                 |
-| `RQ_WEBRTC_VERSION`              | `webrtcVersion`             | `1.0`                     | WebRTC version in session create body                                                       |
-| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | Session budget after claim                                                                  |
-| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | Time to claim a reserved slot                                                               |
-| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | Lead time for `time_warning`                                                                |
-| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime                                                                         |
-| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | Session reconciliation cadence                                                              |
-| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base URL                                                                        |
-| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                                                                |
-| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry                                                                  |
-| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | Password for admin dashboard connections                                                    |
-| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`) |
+| Env var                          | Config key                  | Default                   | Purpose                                                                                                            |
+| -------------------------------- | --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | Mints JWTs; creates/stops sessions                                                                                 |
+| `RQ_MODEL`                       | `model`                     | — (**required**)          | Model for `POST /sessions`                                                                                         |
+| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | Concurrent Reactor sessions (GPU ceiling)                                                                          |
+| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | Members per session (fill-in before create)                                                                        |
+| `RQ_WEBRTC_VERSION`              | `webrtcVersion`             | `1.0`                     | WebRTC version in session create body                                                                              |
+| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | Session budget after claim                                                                                         |
+| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | Time to claim a reserved slot                                                                                      |
+| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | Lead time for `time_warning`                                                                                       |
+| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime                                                                                                |
+| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | Session reconciliation cadence                                                                                     |
+| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base URL                                                                                               |
+| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                                                                                       |
+| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry                                                                                         |
+| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | Password for admin dashboard connections                                                                           |
+| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`)                        |
+| `RQ_ALLOWED_ORIGINS`             | `allowedOrigins`            | — (allow all)             | Comma-separated `Origin` allow-list for WebSocket connections; unset accepts any origin, `*` allows all explicitly |
 
 `acquireSession` / `releaseSession` are code-only overrides (functions, not env) —
 see [Overriding session lifecycle](#overriding-session-lifecycle).
@@ -349,9 +350,10 @@ see [Overriding session lifecycle](#overriding-session-lifecycle).
 | `onSessionClosed(sessionId, reason)`      | Last member left; session record removed         |
 | `onError(where, error)`                   | Non-fatal server errors (mint, create, stop, …)  |
 
-Debug while developing: `curl http://127.0.0.1:1999/parties/main/<room>` returns
-`maxSessions`, `usersPerSession`, `capacity`, `queueLength`, `activeCount`, and
-per-session `members` lists.
+To inspect a running room — capacity, the live queue, members, and per-session
+state — connect as an [admin](#admin-mode). There is no unauthenticated status
+endpoint: room state is only ever exposed over an authenticated admin
+connection, never to an anonymous HTTP request.
 
 ## Admin mode
 
