@@ -33,8 +33,8 @@ export default function Page() {
         <Card>
           <h1 style={s.h1}>Setup</h1>
           <p style={s.muted}>
-            Copy <code>.env.example</code> → <code>.env</code>, set{" "}
-            <code>RQ_REACTOR_API_KEY</code>, then run <code>pnpm dev</code>.
+            Copy <code>.env.example</code> → <code>.env</code>, set <code>RQ_REACTOR_API_KEY</code>,
+            then run <code>pnpm dev</code>.
           </p>
         </Card>
       </Center>
@@ -137,8 +137,8 @@ function Gate() {
           <Card>
             <h1 style={s.h1}>Already open elsewhere</h1>
             <p style={s.muted}>
-              This browser has the demo open in another tab. Close it; this page
-              reconnects automatically.
+              This browser has the demo open in another tab. Close it; this page reconnects
+              automatically.
             </p>
           </Card>
         </Center>
@@ -162,10 +162,7 @@ function Session({ sessionId, onLeave }: { sessionId: string; onLeave: () => voi
   return (
     // getJwt is referentially stable — pass it directly, don't wrap in an arrow.
     // sessionId comes from the queue server (POST /sessions on admit).
-    <HeliosProvider
-      getJwt={getJwt}
-      connectOptions={{ autoConnect: true, sessionId }}
-    >
+    <HeliosProvider getJwt={getJwt} connectOptions={{ autoConnect: true, sessionId }}>
       <SessionBridge />
       <AutoPrompt />
       <div style={s.stage}>

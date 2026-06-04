@@ -35,7 +35,8 @@ export default function AdminPage() {
             </Link>
           </div>
           <p style={s.muted}>
-            Password must match <code>RQ_ADMIN_PASSWORD</code> in your <code>.env</code> (loaded by PartyKit).
+            Password must match <code>RQ_ADMIN_PASSWORD</code> in your <code>.env</code> (loaded by
+            PartyKit).
           </p>
           <label style={s.label}>
             Admin password
@@ -162,8 +163,14 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
             <ConfigRow label="Token TTL" value={`${cfg.tokenTtlSeconds}s`} />
             <ConfigRow label="Poll interval" value={`${cfg.pollIntervalMs / 1000}s`} />
             <ConfigRow label="Stop on expiry" value={cfg.stopSessionsOnExpiry ? "yes" : "no"} />
-            <ConfigRow label="Duplicate tabs" value={cfg.allowDuplicateConnections ? "allowed" : "blocked"} />
-            <ConfigRow label="Session source" value={cfg.sessionSource === "custom" ? "custom" : "create/stop"} />
+            <ConfigRow
+              label="Duplicate tabs"
+              value={cfg.allowDuplicateConnections ? "allowed" : "blocked"}
+            />
+            <ConfigRow
+              label="Session source"
+              value={cfg.sessionSource === "custom" ? "custom" : "create/stop"}
+            />
             <ConfigRow label="WebRTC" value={cfg.webrtcVersion} />
             <ConfigRow label="API version" value={String(cfg.apiVersion)} />
             <ConfigRow label="Coordinator" value={cfg.coordinatorUrl} stacked />
@@ -285,9 +292,7 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
                 <div key={row.connId} style={s.queueRow}>
                   <span style={s.queuePos}>#{row.position}</span>
                   <span style={s.mono}>{shortId(row.connId)}</span>
-                  <span style={s.queueClient}>
-                    {row.clientId ? shortId(row.clientId) : "—"}
-                  </span>
+                  <span style={s.queueClient}>{row.clientId ? shortId(row.clientId) : "—"}</span>
                   <button
                     type="button"
                     style={s.btnDanger}
@@ -325,15 +330,7 @@ function BigNumber({
   );
 }
 
-function ConfigRow({
-  label,
-  value,
-  stacked,
-}: {
-  label: string;
-  value: string;
-  stacked?: boolean;
-}) {
+function ConfigRow({ label, value, stacked }: { label: string; value: string; stacked?: boolean }) {
   if (stacked) {
     return (
       <div style={s.cfgRowStacked}>
@@ -366,11 +363,7 @@ function formatMs(ms: number): string {
 }
 
 function Shell({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
-  return (
-    <main style={{ ...s.page, maxWidth: wide ? 1100 : 420 }}>
-      {children}
-    </main>
-  );
+  return <main style={{ ...s.page, maxWidth: wide ? 1100 : 420 }}>{children}</main>;
 }
 
 function Card({ children }: { children: React.ReactNode }) {

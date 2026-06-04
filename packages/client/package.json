@@ -2,7 +2,7 @@
   "name": "@reactor-team/queue",
   "version": "0.1.0",
   "description": "Client for the Reactor demo queue: a framework-agnostic WebSocket client plus a React/zustand layer that exposes a getJwt resolver you drop straight into the Reactor SDK.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -29,7 +29,9 @@
       "require": "./dist/admin-react.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -44,8 +46,12 @@
     "zustand": ">=4"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true },
-    "zustand": { "optional": true }
+    "react": {
+      "optional": true
+    },
+    "zustand": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

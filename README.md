@@ -31,7 +31,7 @@ Three concrete reasons teams reach for it:
   drive word-of-mouth instead of a flat "try it" button that quietly 429s under
   load.
 - **It protects a hard capacity ceiling.** During a viral moment, uncapped
-  traffic exhausts GPU capacity and *everyone's* experience breaks. A queue
+  traffic exhausts GPU capacity and _everyone's_ experience breaks. A queue
   caps concurrent Reactor sessions and members, time-boxes each turn, and
   keeps the wait predictable instead of degrading for everyone.
 - **It right-sizes demos for scarce or new models.** Private or early-access
@@ -48,7 +48,7 @@ Reactor who needs to meter live access to a model:
 - **Reactor API-platform users** — any developer who wants to add a waiting
   room to their own Reactor-powered app or demo.
 - **Reactor's own demos** — gating first-party launches and public showcases.
-- **Reactor model partners** launching private/early-access demos *with* Reactor
+- **Reactor model partners** launching private/early-access demos _with_ Reactor
   (e.g. Overworld and similar) — capping a small-capacity model to a safe number
   of concurrent users while still letting a crowd line up.
 
@@ -96,11 +96,11 @@ The queue server is the **single source of truth**. It:
 
 Terminology is **session** everywhere (no “room” or “slot” in the API):
 
-| Concept | Meaning |
-|---|---|
-| **Slot** | A capacity reservation (`slot:<id>` in durable storage). Holds up to `usersPerSession` members and lazily owns one Reactor session. |
-| **Member** | One admitted browser connection. Has its own grace/claim timer (`member:<connId>`). |
-| **Queue** | Waiting connections, stored one key per waiter (`q:<seq>`) for O(1), unbounded enqueue/dequeue. |
+| Concept    | Meaning                                                                                                                             |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Slot**   | A capacity reservation (`slot:<id>` in durable storage). Holds up to `usersPerSession` members and lazily owns one Reactor session. |
+| **Member** | One admitted browser connection. Has its own grace/claim timer (`member:<connId>`).                                                 |
+| **Queue**  | Waiting connections, stored one key per waiter (`q:<seq>`) for O(1), unbounded enqueue/dequeue.                                     |
 
 Admission **fills an open slot before opening a new one**: if any slot has
 `members.length < usersPerSession`, the head of the queue takes a seat there;
@@ -139,11 +139,11 @@ is no `reportSession()` or `session_started` wire message anymore.
 
 ## Packages
 
-| Package | What it is | You install it… |
-|---|---|---|
-| [`@reactor-team/queue`](./packages/client) | Client: framework-agnostic `ReactorQueueClient` + React/zustand layer (`./react`) | in your web app |
-| [`@reactor-team/queue-server`](./packages/server) | The PartyKit `Server` factory | in your PartyKit project |
-| [`@reactor-team/queue-protocol`](./packages/protocol) | Shared wire types + defaults (transitive) | automatically |
+| Package                                               | What it is                                                                        | You install it…          |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------ |
+| [`@reactor-team/queue`](./packages/client)            | Client: framework-agnostic `ReactorQueueClient` + React/zustand layer (`./react`) | in your web app          |
+| [`@reactor-team/queue-server`](./packages/server)     | The PartyKit `Server` factory                                                     | in your PartyKit project |
+| [`@reactor-team/queue-protocol`](./packages/protocol) | Shared wire types + defaults (transitive)                                         | automatically            |
 
 ---
 
@@ -164,7 +164,7 @@ export default createReactorQueueServer({ model: "helios", maxSessions: 3 });
   "name": "my-demo-queue",
   "main": "partykit/server.ts",
   "compatibilityDate": "2024-11-01",
-  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" }
+  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" },
 }
 ```
 
@@ -199,9 +199,14 @@ export default function App() {
 
 function Gate() {
   const q = useReactorQueue();
-  if (q.phase === "queued")   return <p>Position {q.position} of {q.total}</p>;
+  if (q.phase === "queued")
+    return (
+      <p>
+        Position {q.position} of {q.total}
+      </p>
+    );
   if (q.phase === "admitted") return <button onClick={q.claim}>Enter</button>;
-  if (q.phase === "expired")  return <button onClick={q.rejoin}>Rejoin</button>;
+  if (q.phase === "expired") return <button onClick={q.rejoin}>Rejoin</button>;
   if (q.phase !== "active" || !q.sessionId) return null;
 
   return (
@@ -234,7 +239,7 @@ import { ReactorQueueClient } from "@reactor-team/queue";
 import { Reactor } from "@reactor-team/js-sdk";
 
 const queue = new ReactorQueueClient({ host: PARTYKIT_HOST, autoConnect: true });
-queue.subscribe((s) => render(s));      // s.phase, s.position, …
+queue.subscribe((s) => render(s)); // s.phase, s.position, …
 
 // when the user claims and you want to connect:
 queue.claim();
@@ -254,15 +259,15 @@ The client exposes a single `phase` you can switch on:
 `idle → connecting → queued → admitted → starting → active → expired`
 (plus `rejected` for a duplicate tab and `disconnected` for a dropped socket).
 
-| Phase | Meaning | Typical UI |
-|---|---|---|
-| `connecting` | Socket opening | spinner |
-| `queued` | In line | "Position {position} of {total}" |
-| `admitted` | Capacity slot reserved, `graceMs` to act. No session yet | "You're up — Enter" |
-| `starting` | `claim()`ed; server is creating the session | "Starting…" spinner |
-| `active` | `session_ready` received; `sessionId` set — attach the SDK | the model |
-| `expired` | Time elapsed / reclaimed; session stopped | "Rejoin" |
-| `rejected` | Duplicate tab; auto-retries | "Open in one tab" |
+| Phase        | Meaning                                                    | Typical UI                       |
+| ------------ | ---------------------------------------------------------- | -------------------------------- |
+| `connecting` | Socket opening                                             | spinner                          |
+| `queued`     | In line                                                    | "Position {position} of {total}" |
+| `admitted`   | Capacity slot reserved, `graceMs` to act. No session yet   | "You're up — Enter"              |
+| `starting`   | `claim()`ed; server is creating the session                | "Starting…" spinner              |
+| `active`     | `session_ready` received; `sessionId` set — attach the SDK | the model                        |
+| `expired`    | Time elapsed / reclaimed; session stopped                  | "Rejoin"                         |
+| `rejected`   | Duplicate tab; auto-retries                                | "Open in one tab"                |
 
 `sessionId` is `null` until `active`; gate your `<ReactorProvider>` on
 `phase === "active" && sessionId`.
@@ -274,18 +279,18 @@ deadline. A `time_warning` (with `secondsLeft`) also arrives
 
 ### Client state (`QueueState`)
 
-| Field | When set | Use |
-|---|---|---|
-| `phase` | always | Switch UI (`queued`, `admitted`, `active`, …) |
-| `position`, `total` | `queued` | Line position (1-based) |
-| `active` | queue updates | Members currently in a session |
-| `capacity` | `admitted` / `queue_position` | Max live members (`maxSessions × usersPerSession`) |
-| `sessionId` | `admitted` | Pass to `connectOptions.sessionId` |
-| `token`, `tokenExpiresAt` | `token` message | Short-lived JWT; `getJwt` refreshes |
-| `sessionEndsAt` | `admitted` / `claim` | Countdown (grace, then full session) |
-| `sessionDurationMs` | `admitted` | Full budget after `claim()` |
-| `secondsLeft` | `time_warning` | Pre-expiry warning |
-| `reason` | `rejected` / `expired` / `error` | Display or logging |
+| Field                     | When set                         | Use                                                |
+| ------------------------- | -------------------------------- | -------------------------------------------------- |
+| `phase`                   | always                           | Switch UI (`queued`, `admitted`, `active`, …)      |
+| `position`, `total`       | `queued`                         | Line position (1-based)                            |
+| `active`                  | queue updates                    | Members currently in a session                     |
+| `capacity`                | `admitted` / `queue_position`    | Max live members (`maxSessions × usersPerSession`) |
+| `sessionId`               | `admitted`                       | Pass to `connectOptions.sessionId`                 |
+| `token`, `tokenExpiresAt` | `token` message                  | Short-lived JWT; `getJwt` refreshes                |
+| `sessionEndsAt`           | `admitted` / `claim`             | Countdown (grace, then full session)               |
+| `sessionDurationMs`       | `admitted`                       | Full budget after `claim()`                        |
+| `secondsLeft`             | `time_warning`                   | Pre-expiry warning                                 |
+| `reason`                  | `rejected` / `expired` / `error` | Display or logging                                 |
 
 Actions: `connect`, `leave`, `rejoin`, `claim`, `endSession`, `getJwt` (stable
 reference — pass directly to the SDK).
@@ -298,7 +303,7 @@ app state (the example does exactly this).
 ## Using with React — two gotchas
 
 1. **`autoConnect` + StrictMode.** The Reactor SDK's `<ReactorProvider
-   autoConnect>` connects on mount and disconnects on cleanup; React StrictMode
+autoConnect>` connects on mount and disconnects on cleanup; React StrictMode
    (Next.js dev default) double-invokes that, racing connect against disconnect
    and crashing inside the SDK (`…reading 'pollSessionReady'`). Production never
    double-mounts. Either set `reactStrictMode: false` (what the example does) or
@@ -312,37 +317,37 @@ app state (the example does exactly this).
 All values resolve as **default → `createReactorQueueServer({...})` → env var**
 (env wins, for redeploy-free tuning). The API key must come from a secret.
 
-| Env var | Config key | Default | Purpose |
-|---|---|---|---|
-| `RQ_REACTOR_API_KEY` | `apiKey` | — (**required**, secret) | Mints JWTs; creates/stops sessions |
-| `RQ_MODEL` | `model` | — (**required**) | Model for `POST /sessions` |
-| `RQ_MAX_SESSIONS` | `maxSessions` | `1` | Concurrent Reactor sessions (GPU ceiling) |
-| `RQ_USERS_PER_SESSION` | `usersPerSession` | `1` | Members per session (fill-in before create) |
-| `RQ_WEBRTC_VERSION` | `webrtcVersion` | `1.0` | WebRTC version in session create body |
-| `RQ_SESSION_DURATION_MS` | `sessionDurationMs` | `120000` | Session budget after claim |
-| `RQ_ADMISSION_GRACE_MS` | `admissionGraceMs` | `45000` | Time to claim a reserved slot |
-| `RQ_WARNING_BEFORE_MS` | `warningBeforeMs` | `30000` | Lead time for `time_warning` |
-| `RQ_TOKEN_TTL_SECONDS` | `tokenTtlSeconds` | `60` | Minted JWT lifetime |
-| `RQ_POLL_INTERVAL_MS` | `pollIntervalMs` | `15000` | Session reconciliation cadence |
-| `RQ_COORDINATOR_URL` | `coordinatorUrl` | `https://api.reactor.inc` | Reactor API base URL |
-| `RQ_API_VERSION` | `apiVersion` | `1` | `Reactor-API-Version` header |
-| `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry |
-| `RQ_ADMIN_PASSWORD` | `adminPassword` | — (off) | Password for admin dashboard connections |
-| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false` | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`) |
+| Env var                          | Config key                  | Default                   | Purpose                                                                                     |
+| -------------------------------- | --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
+| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | Mints JWTs; creates/stops sessions                                                          |
+| `RQ_MODEL`                       | `model`                     | — (**required**)          | Model for `POST /sessions`                                                                  |
+| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | Concurrent Reactor sessions (GPU ceiling)                                                   |
+| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | Members per session (fill-in before create)                                                 |
+| `RQ_WEBRTC_VERSION`              | `webrtcVersion`             | `1.0`                     | WebRTC version in session create body                                                       |
+| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | Session budget after claim                                                                  |
+| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | Time to claim a reserved slot                                                               |
+| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | Lead time for `time_warning`                                                                |
+| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime                                                                         |
+| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | Session reconciliation cadence                                                              |
+| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base URL                                                                        |
+| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                                                                |
+| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry                                                                  |
+| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | Password for admin dashboard connections                                                    |
+| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`) |
 
 `acquireSession` / `releaseSession` are code-only overrides (functions, not env) —
 see [Overriding session lifecycle](#overriding-session-lifecycle).
 
 `createReactorQueueServer` also accepts optional **hooks** (not env-configurable):
 
-| Hook | When |
-|---|---|
-| `onUserConnected(connId)` | Connection joined the queue |
-| `onUserDisconnected(connId)` | WebSocket closed |
-| `onUserEnteredSession(connId, sessionId)` | Member admitted (JWT + `sessionId` sent) |
-| `onSessionCreated(sessionId)` | Server called `POST /sessions` for a new session |
-| `onSessionClosed(sessionId, reason)` | Last member left; session record removed |
-| `onError(where, error)` | Non-fatal server errors (mint, create, stop, …) |
+| Hook                                      | When                                             |
+| ----------------------------------------- | ------------------------------------------------ |
+| `onUserConnected(connId)`                 | Connection joined the queue                      |
+| `onUserDisconnected(connId)`              | WebSocket closed                                 |
+| `onUserEnteredSession(connId, sessionId)` | Member admitted (JWT + `sessionId` sent)         |
+| `onSessionCreated(sessionId)`             | Server called `POST /sessions` for a new session |
+| `onSessionClosed(sessionId, reason)`      | Last member left; session record removed         |
+| `onError(where, error)`                   | Non-fatal server errors (mint, create, stop, …)  |
 
 Debug while developing: `curl http://127.0.0.1:1999/parties/main/<room>` returns
 `maxSessions`, `usersPerSession`, `capacity`, `queueLength`, `activeCount`, and
@@ -370,7 +375,7 @@ import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/q
   refreshIntervalMs={10_000} // optional poll; server also pushes on every change
 >
   <YourDashboard />
-</ReactorQueueAdminProvider>
+</ReactorQueueAdminProvider>;
 
 function YourDashboard() {
   const { phase, snapshot, kickMember, kickQueued, closeSession } = useReactorQueueAdmin();
@@ -402,16 +407,28 @@ createReactorQueueServer({
   // Get a session id when a user claims. Called once per session (first member).
   // Default: POST /sessions. Override to lease one from an external service.
   acquireSession: async ({ model }) => {
-    const r = await fetch(`${POOL}/lease`, { method: "POST", headers, body: JSON.stringify({ model }) });
-    return (await r.json()).session_id;        // throw if none available → client gets `error`, retries
+    const r = await fetch(`${POOL}/lease`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model }),
+    });
+    return (await r.json()).session_id; // throw if none available → client gets `error`, retries
   },
 
   // A user LEFT the session (not necessarily "delete it"). You get who left and
   // whether they were the last one. Default: delete via DELETE /sessions on the
   // last member. Override to keep the session and just react (e.g. hand it back).
   releaseSession: async ({ sessionId, userId, reason, lastMember }) => {
-    await fetch(`${POOL}/left`, { method: "POST", headers,
-      body: JSON.stringify({ session_id: sessionId, user_id: userId, reason, last_member: lastMember }) });
+    await fetch(`${POOL}/left`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        reason,
+        last_member: lastMember,
+      }),
+    });
   },
 });
 ```
@@ -458,20 +475,6 @@ pnpm example     # run the basic example (web + PartyKit) — needs examples/bas
 
 This is a pnpm workspace; the packages reference each other via `workspace:*`.
 
-## Migrating from the previous queue API
-
-If you integrated an earlier version of this library:
-
-| Before | After |
-|---|---|
-| `maxConcurrent` / `RQ_MAX_CONCURRENT` | `maxSessions` / `RQ_MAX_SESSIONS` (+ optional `usersPerSession`) |
-| Client `POST /sessions` + `reportSession(id)` | Server creates session; use `q.sessionId` in `connectOptions` |
-| `session_started` client message | Removed — server sends `sessionId` via `session_ready` after `claim()` |
-| Session created on admit / `sessionId` on `admitted` | Created on `claim()`; `sessionId` arrives in `session_ready` (new `starting` phase) |
-| `capacity` in wire messages | Replaces `maxConcurrent` in `admitted` / `queue_position` |
-| Hooks `onAdmit`, `onClaim`, `onExpire`, … | `onUserConnected`, `onUserEnteredSession`, `onSessionCreated`, … |
-| Server config without `model` | **`RQ_MODEL` required** (must match the model your client uses) |
-
 ## Hibernation (production scaling)
 
 The PartyKit server opts into [Hibernation](https://docs.partykit.io/guides/scaling-partykit-servers-with-hibernation/)
@@ -511,8 +514,23 @@ deployed instance.
 - **Self-healing slots.** Three independent paths free a slot (explicit end,
   socket close, state poll), so a missed disconnect can't wedge the queue.
 - **Tiny client contract.** The client is `getJwt` + server-provided `sessionId`
-  + state; wire `connectOptions.sessionId` into the Reactor SDK.
+  - state; wire `connectOptions.sessionId` into the Reactor SDK.
+
+## Milestones
+
+Where this library is headed. Checked boxes are shipped; the first unchecked box
+is what's up next. The rest is roughly ordered intent, not a commitment.
+
+- [x] Server-owned sessions (queue creates/stops the Reactor session)
+- [x] Hibernation-ready storage model for production-scale rooms
+- [x] Admin dashboard (watch the room, kick members, close sessions)
+- [ ] **Distributing on npmjs** — publish `@reactor-team/queue`,
+      `@reactor-team/queue-server`, and `@reactor-team/queue-protocol` to the
+      public registry so consumers install them directly instead of from source.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+[Apache 2.0](./LICENSE) © 2026 Reactor Technologies, Inc.
+
+See [NOTICE](./NOTICE) for attribution requirements and
+[CONTRIBUTING.md](./CONTRIBUTING.md) for the contributor sign-off (DCO) policy.

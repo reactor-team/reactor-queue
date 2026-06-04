@@ -1,11 +1,6 @@
 import type { AdminActionResultMessage, AdminSnapshotMessage } from "@reactor-team/queue-protocol";
 
-export type AdminPhase =
-  | "idle"
-  | "connecting"
-  | "ready"
-  | "rejected"
-  | "disconnected";
+export type AdminPhase = "idle" | "connecting" | "ready" | "rejected" | "disconnected";
 
 export interface AdminState {
   phase: AdminPhase;

@@ -30,14 +30,14 @@ The single most important thing for building on this well: **most demos only nee
 the high-level path.** Reach for advanced features only when you have the specific
 need. Don't wire admin mode or lifecycle overrides "just in case."
 
-| You want… | Level | What you touch |
-|---|---|---|
-| Gate a model behind a line, time-box turns | **High-level** | `createReactorQueueServer({ model, maxSessions })` + `<ReactorQueueProvider>` + `useReactorQueue()`. Nothing else. |
-| Log/measure admissions, sessions, errors | High-level + **hooks** | `hooks: { onUserEnteredSession, onSessionClosed, … }` |
-| An operator dashboard (watch line, kick users, force-close) | **Advanced: admin mode** | `RQ_ADMIN_PASSWORD` + `ReactorQueueAdminProvider` / `useReactorQueueAdmin` |
-| Sessions come from **another service**, not `POST /sessions` (pre-provisioned pool, or a session that already has another client attached) | **Advanced: lifecycle overrides** | `acquireSession` / `releaseSession` |
-| >1 user sharing one Reactor session | **Advanced (gated on platform)** | `usersPerSession` (queue-side ready; needs platform multi-connection) |
-| Tens of thousands of concurrent waiters | **Operational** | hibernation is already on; understand the single-room ceiling |
+| You want…                                                                                                                                  | Level                             | What you touch                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Gate a model behind a line, time-box turns                                                                                                 | **High-level**                    | `createReactorQueueServer({ model, maxSessions })` + `<ReactorQueueProvider>` + `useReactorQueue()`. Nothing else. |
+| Log/measure admissions, sessions, errors                                                                                                   | High-level + **hooks**            | `hooks: { onUserEnteredSession, onSessionClosed, … }`                                                              |
+| An operator dashboard (watch line, kick users, force-close)                                                                                | **Advanced: admin mode**          | `RQ_ADMIN_PASSWORD` + `ReactorQueueAdminProvider` / `useReactorQueueAdmin`                                         |
+| Sessions come from **another service**, not `POST /sessions` (pre-provisioned pool, or a session that already has another client attached) | **Advanced: lifecycle overrides** | `acquireSession` / `releaseSession`                                                                                |
+| >1 user sharing one Reactor session                                                                                                        | **Advanced (gated on platform)**  | `usersPerSession` (queue-side ready; needs platform multi-connection)                                              |
+| Tens of thousands of concurrent waiters                                                                                                    | **Operational**                   | hibernation is already on; understand the single-room ceiling                                                      |
 
 If your task is "put a queue in front of model X", you are in the High-level row.
 Stop there.
@@ -71,6 +71,7 @@ The PartyKit room is the **single source of truth**:
    sees a terminal Reactor session state.
 
 **Slot vs session vs member** (the core nouns):
+
 - **Slot** — a capacity reservation. Holds up to `usersPerSession` members and
   lazily owns one Reactor session (created on the first member's claim).
 - **Member** — one admitted connection, with its own grace/claim timer.
@@ -78,11 +79,11 @@ The PartyKit room is the **single source of truth**:
 
 ## Packages
 
-| Package | Where it runs | Import |
-|---|---|---|
-| `@reactor-team/queue-server` | your PartyKit project | `createReactorQueueServer` |
-| `@reactor-team/queue` | your web app | `ReactorQueueClient` (core), `@reactor-team/queue/react` (Provider + hooks), `@reactor-team/queue/admin` + `/admin/react` (admin) |
-| `@reactor-team/queue-protocol` | transitive | wire message types + defaults |
+| Package                        | Where it runs         | Import                                                                                                                            |
+| ------------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `@reactor-team/queue-server`   | your PartyKit project | `createReactorQueueServer`                                                                                                        |
+| `@reactor-team/queue`          | your web app          | `ReactorQueueClient` (core), `@reactor-team/queue/react` (Provider + hooks), `@reactor-team/queue/admin` + `/admin/react` (admin) |
+| `@reactor-team/queue-protocol` | transitive            | wire message types + defaults                                                                                                     |
 
 ## What the queue automates (the Reactor pieces)
 
@@ -111,9 +112,12 @@ export default createReactorQueueServer({ model: "helios", maxSessions: 3 });
 
 ```jsonc
 // partykit.json — non-secret tunables in `vars`. Secrets (API key, admin password) live in .env only.
-{ "name": "my-demo-queue", "main": "partykit/server.ts",
+{
+  "name": "my-demo-queue",
+  "main": "partykit/server.ts",
   "compatibilityDate": "2024-11-01",
-  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" } }
+  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" },
+}
 ```
 
 ```bash
@@ -138,10 +142,15 @@ function App() {
 
 function Gate() {
   const q = useReactorQueue();
-  if (q.phase === "queued")   return <p>#{q.position} of {q.total}</p>;
+  if (q.phase === "queued")
+    return (
+      <p>
+        #{q.position} of {q.total}
+      </p>
+    );
   if (q.phase === "admitted") return <button onClick={q.claim}>Enter</button>;
-  if (q.phase === "starting") return <p>Starting…</p>;          // claimed, session being created
-  if (q.phase === "expired")  return <button onClick={q.rejoin}>Rejoin</button>;
+  if (q.phase === "starting") return <p>Starting…</p>; // claimed, session being created
+  if (q.phase === "expired") return <button onClick={q.rejoin}>Rejoin</button>;
   if (q.phase !== "active" || !q.sessionId) return null;
   return (
     <ReactorProvider
@@ -188,15 +197,15 @@ Vanilla (no React): `new ReactorQueueClient({ host, autoConnect: true })`, then
 `idle → connecting → queued → admitted → starting → active → expired`, plus
 `rejected` (duplicate tab; auto-retries) and `disconnected` (dropped socket).
 
-| Phase | Meaning | Typical UI |
-|---|---|---|
-| `connecting` | socket opening | spinner |
-| `queued` | in line | "#{position} of {total}" |
-| `admitted` | capacity slot reserved, grace ticking. **No session yet** | "Enter" + grace countdown |
-| `starting` | claimed; server is creating the session | "Starting…" spinner |
-| `active` | `session_ready` received, `sessionId` set | the model + session countdown |
-| `expired` | time up / reclaimed; session released | "Rejoin" prompt |
-| `rejected` | duplicate tab | "open in one tab" |
+| Phase        | Meaning                                                   | Typical UI                    |
+| ------------ | --------------------------------------------------------- | ----------------------------- |
+| `connecting` | socket opening                                            | spinner                       |
+| `queued`     | in line                                                   | "#{position} of {total}"      |
+| `admitted`   | capacity slot reserved, grace ticking. **No session yet** | "Enter" + grace countdown     |
+| `starting`   | claimed; server is creating the session                   | "Starting…" spinner           |
+| `active`     | `session_ready` received, `sessionId` set                 | the model + session countdown |
+| `expired`    | time up / reclaimed; session released                     | "Rejoin" prompt               |
+| `rejected`   | duplicate tab                                             | "open in one tab"             |
 
 `idle` means "not in the queue" — the SAME state whether the user never joined or
 just left. There is intentionally no `left` phase; track "you left — rejoin?" in
@@ -217,22 +226,22 @@ just left. There is intentionally no `left` phase; track "you left — rejoin?" 
 Resolution order: **built-in default → `createReactorQueueServer({...})` → env
 var** (env wins, for redeploy-free tuning). The API key MUST come from a secret.
 
-| Env var | Config key | Default | Purpose |
-|---|---|---|---|
-| `RQ_REACTOR_API_KEY` | `apiKey` | — (**required**, secret) | mint JWTs; create/stop sessions |
-| `RQ_MODEL` | `model` | — (**required**) | model for `POST /sessions` |
-| `RQ_MAX_SESSIONS` | `maxSessions` | `1` | concurrent Reactor sessions |
-| `RQ_USERS_PER_SESSION` | `usersPerSession` | `1` | members per session |
-| `RQ_SESSION_DURATION_MS` | `sessionDurationMs` | `120000` | session budget after claim |
-| `RQ_ADMISSION_GRACE_MS` | `admissionGraceMs` | `45000` | time to claim a reserved slot |
-| `RQ_WARNING_BEFORE_MS` | `warningBeforeMs` | `30000` | lead time for `time_warning` |
-| `RQ_TOKEN_TTL_SECONDS` | `tokenTtlSeconds` | `60` | minted JWT lifetime (keep short) |
-| `RQ_POLL_INTERVAL_MS` | `pollIntervalMs` | `15000` | session reconciliation cadence |
-| `RQ_COORDINATOR_URL` | `coordinatorUrl` | `https://api.reactor.inc` | Reactor API base |
-| `RQ_API_VERSION` | `apiVersion` | `1` | `Reactor-API-Version` header |
-| `RQ_STOP_SESSIONS` | `stopSessionsOnExpiry` | `true` | `DELETE` session on expiry (default release) |
-| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false` | allow same browser in multiple tabs |
-| `RQ_ADMIN_PASSWORD` | `adminPassword` | — (off) | enables admin mode (see below) |
+| Env var                          | Config key                  | Default                   | Purpose                                      |
+| -------------------------------- | --------------------------- | ------------------------- | -------------------------------------------- |
+| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | mint JWTs; create/stop sessions              |
+| `RQ_MODEL`                       | `model`                     | — (**required**)          | model for `POST /sessions`                   |
+| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | concurrent Reactor sessions                  |
+| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | members per session                          |
+| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | session budget after claim                   |
+| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | time to claim a reserved slot                |
+| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | lead time for `time_warning`                 |
+| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | minted JWT lifetime (keep short)             |
+| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | session reconciliation cadence               |
+| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base                             |
+| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                 |
+| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry (default release) |
+| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | allow same browser in multiple tabs          |
+| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | enables admin mode (see below)               |
 
 Tuning intuition: throughput ≈ `(maxSessions × usersPerSession) / sessionDurationMs`.
 Shorter sessions / more slots move the line faster but cost more GPU.
@@ -244,14 +253,14 @@ when the user clicks Enter; both defaults satisfy this.
 Pass `hooks: { … }` to `createReactorQueueServer`. Use these for logging/metrics —
 they never change behavior. Keep them fast and non-throwing.
 
-| Hook | Fires when |
-|---|---|
-| `onUserConnected(connId)` | a connection joined the queue |
-| `onUserDisconnected(connId)` | a connection's socket closed |
-| `onUserEnteredSession(connId, sessionId)` | a member **claimed** and got a session |
-| `onSessionCreated(sessionId)` | a session was acquired for a slot (first claim) |
-| `onSessionClosed(sessionId, reason)` | the last member left; slot/session torn down |
-| `onError(where, error)` | a non-fatal server error (mint, acquire, release, …) |
+| Hook                                      | Fires when                                           |
+| ----------------------------------------- | ---------------------------------------------------- |
+| `onUserConnected(connId)`                 | a connection joined the queue                        |
+| `onUserDisconnected(connId)`              | a connection's socket closed                         |
+| `onUserEnteredSession(connId, sessionId)` | a member **claimed** and got a session               |
+| `onSessionCreated(sessionId)`             | a session was acquired for a slot (first claim)      |
+| `onSessionClosed(sessionId, reason)`      | the last member left; slot/session torn down         |
+| `onError(where, error)`                   | a non-fatal server error (mint, acquire, release, …) |
 
 ## Client config (`ReactorQueueClientOptions` / provider props)
 
@@ -262,7 +271,7 @@ they never change behavior. Keep them fast and non-throwing.
 
 # Advanced: session lifecycle overrides (delegate to another service)
 
-**When to use:** the queue should *not* own session creation. Two common shapes:
+**When to use:** the queue should _not_ own session creation. Two common shapes:
 
 - Sessions are **pre-provisioned by another service** (a warm pool) and the queue
   should **lease** one instead of calling `POST /sessions`.
@@ -355,8 +364,8 @@ import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/q
 
 <ReactorQueueAdminProvider
   host={PARTYKIT_HOST}
-  password={password}            // string OR async () => string (env, prompt, your auth — you decide)
-  refreshIntervalMs={10_000}     // optional poll to keep msLeft countdowns live; server still pushes on change
+  password={password} // string OR async () => string (env, prompt, your auth — you decide)
+  refreshIntervalMs={10_000} // optional poll to keep msLeft countdowns live; server still pushes on change
 >
   <Dashboard />
 </ReactorQueueAdminProvider>;
@@ -369,7 +378,7 @@ function Dashboard() {
 ```
 
 - `password` is a **resolver you control** — hardcode, read from a field, call your
-  own auth. The library doesn't prescribe how operators authenticate to *your* page;
+  own auth. The library doesn't prescribe how operators authenticate to _your_ page;
   it only checks the value against `RQ_ADMIN_PASSWORD`.
 - Hooks: `useReactorQueueAdmin()` (state + actions), `useAdminSelector(s => …)`,
   `useAdminActions()`, `useReactorQueueAdminClient()`.
@@ -431,6 +440,7 @@ and access is gated by the line. The model UI is unchanged.
 # React footguns (read before you ship)
 
 ### 1. `autoConnect` + React StrictMode = connect/disconnect race
+
 StrictMode (Next.js dev default) double-invokes effects. `<ReactorProvider
 autoConnect>` then races `connect()` against a cleanup `disconnect()` →
 `TypeError: …reading 'pollSessionReady'`, and the spurious `SessionBridge` unmount
@@ -438,20 +448,24 @@ frees the slot. Production never double-mounts. **Fix:** `reactStrictMode: false
 (what `examples/basic` does) OR drop `autoConnect` and connect via a button.
 
 ### 2. Keep `getJwt` referentially stable
+
 `useReactorQueue().getJwt` is already stable — pass it directly. Never wrap it in
 a fresh inline arrow (`getJwt={() => q.getJwt()}`); that churns the session.
 
 ### 3. `endSession()` frees the slot — only on real exit
+
 `SessionBridge`'s unmount `endSession()` tells the server the user left and slides
 the queue. Don't call it on transient state changes (and avoid the StrictMode
 combo that triggers it spuriously).
 
 ### 4. The token is short-lived by design
+
 60s default; the client auto-refreshes and hands the last cached token to the SDK
 during teardown so cleanup `DELETE`s succeed. Don't raise `RQ_TOKEN_TTL_SECONDS`
 to "avoid refresh" — short tokens are the security model.
 
 ### 5. Reconnects change the connection id
+
 PartySocket reconnects with a new connection id; a mid-session WS reconnect
 re-enters the line. Keep sessions short and the socket healthy; the server's poll
 reconciles state.
@@ -461,8 +475,8 @@ reconciles state.
 - `packages/protocol` holds the wire types + defaults — change here first when
   adding a message; client and server both import it so they can't drift.
 - Server is one PartyKit `Server` class. Storage keys: `q:<seq>` + `qpos:<connId>`
-  + `qseq`/`qcount` (the ordered queue), `member:<connId>`, `slot:<slotId>`,
-  `cid:`/`conn:` (client mapping), `admin:<connId>`. Timers are alarm-driven.
+  - `qseq`/`qcount` (the ordered queue), `member:<connId>`, `slot:<slotId>`,
+    `cid:`/`conn:` (client mapping), `admin:<connId>`. Timers are alarm-driven.
 - All session-end paths funnel through `runRelease`; all session-acquire through
   `runAcquire`. Don't add a second `stopSession`/`createSession` call site.
 - Build/verify: `pnpm build` (tsup), `pnpm typecheck`. Boot with `npx partykit dev`
