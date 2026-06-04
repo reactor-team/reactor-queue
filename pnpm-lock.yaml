@@ -18,8 +18,8 @@ importers:
   examples/basic:
     dependencies:
       '@reactor-models/helios':
-        specifier: ^0.9.0
-        version: 0.9.4(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
+        specifier: ^0.9.5
+        version: 0.9.5(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       '@reactor-team/js-sdk':
         specifier: ^2.11.1
         version: 2.11.1(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
@@ -658,8 +658,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@reactor-models/helios@0.9.4':
-    resolution: {integrity: sha512-kwjWU8trbB4nJ43QYxzmK2svlSu2i2AM3K+iqlUn47MqPKJDj/oRwmkiYWOSkmYkPZJR2PtNOPZtTk/ROmyl7g==}
+  '@reactor-models/helios@0.9.5':
+    resolution: {integrity: sha512-5+n04Q83ERhTYEZFE7yLpvn+wfgfNZ44MOBzmy/SKZaySjxQsVIsM8j7KylnEYp6NspFXaed+Xmrjic++XbVog==}
     peerDependencies:
       react: '>=18'
 
@@ -1766,7 +1766,7 @@ snapshots:
   '@next/swc-win32-x64-msvc@15.5.18':
     optional: true
 
-  '@reactor-models/helios@0.9.4(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
+  '@reactor-models/helios@0.9.5(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
     dependencies:
       '@reactor-team/js-sdk': 2.11.1(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       react: 19.2.6
