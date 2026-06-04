@@ -21,3 +21,8 @@ pnpm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# LICENSE/NOTICE are copied into each package at pack time (prepack) and
+# removed afterwards (postpack); never commit the copies.
+packages/*/LICENSE
+packages/*/NOTICE

@@ -30,9 +30,14 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
+    "prepack": "cp ../../LICENSE ../../NOTICE .",
+    "postpack": "rm -f LICENSE NOTICE",
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit"

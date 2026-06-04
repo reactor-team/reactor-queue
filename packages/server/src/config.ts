@@ -81,6 +81,20 @@ export interface ReactorQueueServerConfig {
   allowDuplicateConnections?: boolean;
 
   /**
+   * Cross-origin allow-list for incoming WebSocket connections. Each entry is an
+   * exact `Origin` header value (scheme + host + optional port, no path), e.g.
+   * `"https://demo.example.com"`. A single `"*"` entry allows any origin.
+   *
+   * When empty/unset (the default) **all** origins are accepted — same as before
+   * this option existed — so it is purely opt-in. Once set, a browser whose
+   * `Origin` is not on the list (and any connection with no `Origin` header) is
+   * rejected before it joins the queue. This is the cross-site abuse control:
+   * without it, any page on the web can open a socket to your room and consume
+   * GPU capacity. Env: `RQ_ALLOWED_ORIGINS` (comma-separated).
+   */
+  allowedOrigins?: string[];
+
+  /**
    * Override how a session id is obtained when an admitted user `claim()`s.
    * Default: create one via the Reactor API (`POST /sessions`). Override to
    * source sessions from elsewhere — e.g. lease a pre-provisioned session from
@@ -136,6 +150,8 @@ export interface ResolvedConfig {
   adminPassword: string | null;
   /** When true, the duplicate-tab (same `clientId`) rejection is disabled. */
   allowDuplicateConnections: boolean;
+  /** Allowed `Origin` values for WebSocket connections. Empty = allow all. `["*"]` = allow all explicitly. */
+  allowedOrigins: string[];
   /** Custom session acquisition, or null to create via the Reactor API. */
   acquireSession: AcquireSessionFn | null;
   /** Custom user-left handler, or null to delete via the Reactor API on last member. */
@@ -165,6 +181,17 @@ function envBool(env: Env, key: string): boolean | undefined {
   if (raw === undefined || raw === null || raw === "") return undefined;
   const s = String(raw).toLowerCase();
   return s === "true" || s === "1" || s === "yes";
+}
+
+/** Parse a comma-separated env var into a trimmed, non-empty list. */
+function envList(env: Env, key: string): string[] | undefined {
+  const raw = env[key];
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const list = String(raw)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : undefined;
 }
 
 function pickNum(envVal: number | undefined, cfgVal: number | undefined, def: number): number {
@@ -248,6 +275,7 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     adminPassword: envStr(env, "RQ_ADMIN_PASSWORD") ?? config.adminPassword ?? null,
     allowDuplicateConnections:
       envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ?? config.allowDuplicateConnections ?? false,
+    allowedOrigins: envList(env, "RQ_ALLOWED_ORIGINS") ?? config.allowedOrigins ?? [],
     acquireSession: config.acquireSession ?? null,
     releaseSession: config.releaseSession ?? null,
   };
