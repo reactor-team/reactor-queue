@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Drop-in waiting-room / queue gating for Reactor demos. PartyKit server + JS/React client that mints short-lived Reactor JWTs only to admitted users.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=18"
   },
@@ -13,7 +13,9 @@
     "typecheck": "pnpm -r --filter \"./packages/*\" typecheck",
     "clean": "pnpm -r exec rm -rf dist .turbo",
     "example": "pnpm --filter @reactor-team/queue-example-basic dev",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint:license": "./scripts/check-license.sh"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

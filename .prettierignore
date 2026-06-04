@@ -1,0 +1,9 @@
+**/pnpm-lock.yaml
+.pnpm-store
+dist
+node_modules
+.next
+out
+.partykit
+.turbo
+.generated

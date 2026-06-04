@@ -105,10 +105,7 @@ export class CoordinatorClient {
    * Create a Reactor session for the configured model. Returns the new
    * `session_id`. Runs billing/quota checks against the server's API key.
    */
-  async createSession(opts: {
-    model: string;
-    webrtcVersion: string;
-  }): Promise<string> {
+  async createSession(opts: { model: string; webrtcVersion: string }): Promise<string> {
     const jwt = await this.getServerJwt();
     const res = await fetch(`${this.baseUrl}/sessions`, {
       method: "POST",

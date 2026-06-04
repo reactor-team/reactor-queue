@@ -6,11 +6,7 @@ import {
   parseServerMessage,
   type ClientMessage,
 } from "@reactor-team/queue-protocol";
-import {
-  INITIAL_STATE,
-  type QueueState,
-  type ReactorQueueClientOptions,
-} from "./types";
+import { INITIAL_STATE, type QueueState, type ReactorQueueClientOptions } from "./types";
 
 const CLIENT_ID_STORAGE_KEY = "reactor-queue:client-id";
 
@@ -49,9 +45,10 @@ interface PendingTokenRequest {
  * {@link ReactorQueueClient.getState}'s `sessionId` (set on admission).
  */
 export class ReactorQueueClient {
-  private readonly opts: Required<
-    Omit<ReactorQueueClientOptions, "clientId" | "party">
-  > & { clientId: string; party?: string };
+  private readonly opts: Required<Omit<ReactorQueueClientOptions, "clientId" | "party">> & {
+    clientId: string;
+    party?: string;
+  };
 
   private socket: PartySocket | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -230,11 +227,7 @@ export class ReactorQueueClient {
       if (socket.readyState === WebSocket.OPEN) {
         this.send({ type: "request_token" });
       } else {
-        socket.addEventListener(
-          "open",
-          () => this.send({ type: "request_token" }),
-          { once: true }
-        );
+        socket.addEventListener("open", () => this.send({ type: "request_token" }), { once: true });
       }
     });
   }
@@ -303,9 +296,10 @@ export class ReactorQueueClient {
         this.setState({
           // Stay in active/starting if a late admitted arrives; otherwise the
           // user must claim to get a session.
-          phase: this.state.phase === "active" || this.state.phase === "starting"
-            ? this.state.phase
-            : "admitted",
+          phase:
+            this.state.phase === "active" || this.state.phase === "starting"
+              ? this.state.phase
+              : "admitted",
           position: 0,
           total: 0,
           active: msg.active,

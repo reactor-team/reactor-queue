@@ -2,7 +2,7 @@
   "name": "@reactor-team/queue-server",
   "version": "0.1.0",
   "description": "PartyKit queue/waiting-room server for Reactor demos: FIFO admission gating, short-lived Reactor JWT minting, per-user session timers, and session reaping.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -14,7 +14,9 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",

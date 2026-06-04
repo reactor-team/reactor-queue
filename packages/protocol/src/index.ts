@@ -163,11 +163,7 @@ export interface LeaveMessage {
   type: "leave";
 }
 
-export type ClientMessage =
-  | ClaimMessage
-  | RequestTokenMessage
-  | SessionEndedMessage
-  | LeaveMessage;
+export type ClientMessage = ClaimMessage | RequestTokenMessage | SessionEndedMessage | LeaveMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin mode (server → admin client)

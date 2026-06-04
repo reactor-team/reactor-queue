@@ -208,7 +208,8 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     maxSessions,
     usersPerSession,
     model,
-    webrtcVersion: envStr(env, "RQ_WEBRTC_VERSION") ?? config.webrtcVersion ?? DEFAULT_WEBRTC_VERSION,
+    webrtcVersion:
+      envStr(env, "RQ_WEBRTC_VERSION") ?? config.webrtcVersion ?? DEFAULT_WEBRTC_VERSION,
     sessionDurationMs: pickNum(
       envNum(env, "RQ_SESSION_DURATION_MS"),
       config.sessionDurationMs,
@@ -241,15 +242,12 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     ).replace(/\/+$/, ""),
     apiKey,
     apiVersion: pickNum(envNum(env, "RQ_API_VERSION"), config.apiVersion, 1),
-    stopSessionsOnExpiry:
-      envBool(env, "RQ_STOP_SESSIONS") ?? config.stopSessionsOnExpiry ?? true,
+    stopSessionsOnExpiry: envBool(env, "RQ_STOP_SESSIONS") ?? config.stopSessionsOnExpiry ?? true,
     hooks: config.hooks ?? {},
     capacity: maxSessions * usersPerSession,
     adminPassword: envStr(env, "RQ_ADMIN_PASSWORD") ?? config.adminPassword ?? null,
     allowDuplicateConnections:
-      envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ??
-      config.allowDuplicateConnections ??
-      false,
+      envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ?? config.allowDuplicateConnections ?? false,
     acquireSession: config.acquireSession ?? null,
     releaseSession: config.releaseSession ?? null,
   };

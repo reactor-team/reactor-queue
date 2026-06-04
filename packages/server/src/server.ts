@@ -8,11 +8,7 @@ import {
   type ServerMessage,
 } from "@reactor-team/queue-protocol";
 import { buildAdminSnapshot } from "./admin-snapshot";
-import {
-  resolveConfig,
-  type ReactorQueueServerConfig,
-  type ResolvedConfig,
-} from "./config";
+import { resolveConfig, type ReactorQueueServerConfig, type ResolvedConfig } from "./config";
 import type { ReleaseSessionContext } from "./config";
 import { CoordinatorClient } from "./coordinator";
 
@@ -285,9 +281,7 @@ export function createReactorQueueServer(
       return `admin:${connId}`;
     }
 
-    private async getAdminStatus(
-      connId: string
-    ): Promise<"pending" | "active" | undefined> {
+    private async getAdminStatus(connId: string): Promise<"pending" | "active" | undefined> {
       return this.room.storage.get<"pending" | "active">(this.adminKey(connId));
     }
 

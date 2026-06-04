@@ -2,7 +2,7 @@
   "name": "@reactor-team/queue-protocol",
   "version": "0.1.0",
   "description": "Shared wire protocol (messages + defaults) for @reactor-team/queue client and server.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -14,7 +14,9 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
