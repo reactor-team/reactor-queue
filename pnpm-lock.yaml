@@ -21,8 +21,8 @@ importers:
         specifier: ^0.9.5
         version: 0.9.5(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       '@reactor-team/js-sdk':
-        specifier: ^2.11.1
-        version: 2.11.1(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
+        specifier: 2.11.2
+        version: 2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       '@reactor-team/queue':
         specifier: workspace:*
         version: link:../../packages/client
@@ -663,8 +663,8 @@ packages:
     peerDependencies:
       react: '>=18'
 
-  '@reactor-team/js-sdk@2.11.1':
-    resolution: {integrity: sha512-KbGsE6FHz4cJdlpSSQ0Y6sfitymoJcltM1kWr6tDk6R/gofBHVayLECia6aYE5X1RSlWlciw1D9ZlD5Q0wxsng==}
+  '@reactor-team/js-sdk@2.11.2':
+    resolution: {integrity: sha512-rlnilu1PhOZpJS1TnYj77Iqvctbtl6Ee6zjzSUAaXUPNOISa0H4xejdCsLGBA0OFJwZITC+XsNOte6iFmM7zGQ==}
     engines: {node: '>=18'}
     peerDependencies:
       hls.js: ^1.6.0
@@ -1768,13 +1768,13 @@ snapshots:
 
   '@reactor-models/helios@0.9.5(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
     dependencies:
-      '@reactor-team/js-sdk': 2.11.1(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
+      '@reactor-team/js-sdk': 2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       react: 19.2.6
     transitivePeerDependencies:
       - hls.js
       - zustand
 
-  '@reactor-team/js-sdk@2.11.1(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
+  '@reactor-team/js-sdk@2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
     dependencies:
       mp4box: 2.3.0
       react: 19.2.6

@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@reactor-models/helios": "^0.9.5",
-    "@reactor-team/js-sdk": "^2.11.1",
+    "@reactor-team/js-sdk": "2.11.2",
     "@reactor-team/queue": "workspace:*",
     "hls.js": "^1.6.0",
     "next": "^15.5.0",
