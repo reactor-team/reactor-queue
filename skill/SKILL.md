@@ -366,6 +366,18 @@ snapshot has `config`, `queue`, `slots`/`sessions`, and `members`. Admin actions
 - `admin_close_session` — force-close a session (releases all its members)
 - `admin_refresh` — request a fresh snapshot
 
+### Activity log
+
+The server also streams a structured event log: `admin_log_history` (recent
+buffer, once after auth) then a live `admin_log` per event. The client merges
+both into `useReactorQueueAdmin().logs` (`AdminLogEntry[]`, oldest → newest). Each
+entry has `level` / `event` / `message` and optional `connId` / `sessionId` /
+`data`. Critically, a failed Reactor API call (e.g. a **quota rejection** on
+`POST /sessions`) is logged at `error` with the HTTP status and body in `data` —
+so "why won't it create more sessions?" is answerable from the dashboard. Server
+events are written via one `log()` helper and always hit the server console; the
+ring buffer + admin stream only run when admin mode is enabled.
+
 ## React (build your own UI)
 
 ```tsx
@@ -380,9 +392,11 @@ import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/q
 </ReactorQueueAdminProvider>;
 
 function Dashboard() {
-  const { phase, snapshot, kickMember, kickQueued, closeSession, refresh } = useReactorQueueAdmin();
+  const { phase, snapshot, logs, kickMember, kickQueued, closeSession, refresh } =
+    useReactorQueueAdmin();
   if (phase !== "ready" || !snapshot) return <p>Connecting…</p>;
   // snapshot.config / snapshot.queue / snapshot.members / snapshot.sessions
+  // logs: AdminLogEntry[] — render newest-first; expand entry.data on errors
 }
 ```
 

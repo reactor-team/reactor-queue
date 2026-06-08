@@ -246,11 +246,54 @@ export interface AdminActionResultMessage {
   message?: string;
 }
 
+/** Severity of an {@link AdminLogEntry}. Mirrors `console.log`/`warn`/`error`. */
+export type AdminLogLevel = "info" | "warn" | "error";
+
+/**
+ * One structured server event. The queue server emits these for every notable
+ * thing that happens in a room — a user joining, an admission, a session being
+ * created or closed, and crucially the **reason an API call failed** (e.g. a
+ * Coordinator quota rejection, with its HTTP status and body in `data`). They
+ * are streamed live to admins and kept in a bounded server-side ring buffer so
+ * a freshly-connected admin sees recent history.
+ */
+export interface AdminLogEntry {
+  /** Stable unique id (also usable as a React key). */
+  id: string;
+  /** Unix epoch ms when the event happened. */
+  at: number;
+  level: AdminLogLevel;
+  /** Machine-readable event code, e.g. `"user_admitted"`, `"session_create_failed"`. */
+  event: string;
+  /** Human-readable, already-formatted summary line. */
+  message: string;
+  /** The connection this event concerns, when applicable. */
+  connId?: string;
+  /** The Reactor session this event concerns, when applicable. */
+  sessionId?: string;
+  /** Extra structured context (HTTP status, response body, reason, …). */
+  data?: Record<string, unknown>;
+}
+
+/** A single new log line, pushed live to authenticated admins as it happens. */
+export interface AdminLogMessage {
+  type: "admin_log";
+  entry: AdminLogEntry;
+}
+
+/** Recent log history (oldest → newest), sent once right after admin auth. */
+export interface AdminLogHistoryMessage {
+  type: "admin_log_history";
+  entries: AdminLogEntry[];
+}
+
 export type AdminServerMessage =
   | AdminReadyMessage
   | AdminRejectedMessage
   | AdminSnapshotMessage
-  | AdminActionResultMessage;
+  | AdminActionResultMessage
+  | AdminLogMessage
+  | AdminLogHistoryMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin mode (admin client → server)

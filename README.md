@@ -464,14 +464,76 @@ import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/q
 </ReactorQueueAdminProvider>;
 
 function YourDashboard() {
-  const { phase, snapshot, kickMember, kickQueued, closeSession } = useReactorQueueAdmin();
+  const { phase, snapshot, logs, kickMember, kickQueued, closeSession } = useReactorQueueAdmin();
   // snapshot.config, snapshot.queue, snapshot.members, snapshot.sessions
+  // logs: AdminLogEntry[] — the live activity stream (see below)
 }
 ```
 
 **Vanilla** — `@reactor-team/queue/admin` exports `ReactorQueueAdminClient`.
 
 See [`examples/basic/app/admin`](./examples/basic/app/admin) for a full dashboard.
+
+### Activity log
+
+Beyond the snapshot, the server streams a **structured activity log** to every
+authenticated admin. Each notable event — a user joining, an admission, a session
+created or closed, a timeout, an admin action, and every non-fatal **error** — is
+emitted as an [`AdminLogEntry`](./packages/protocol/src/index.ts):
+
+```ts
+interface AdminLogEntry {
+  id: string;
+  at: number; // unix ms
+  level: "info" | "warn" | "error";
+  event: string; // e.g. "user_admitted", "session_create_failed"
+  message: string; // human-readable summary
+  connId?: string;
+  sessionId?: string;
+  data?: Record<string, unknown>; // structured context (HTTP status, body, …)
+}
+```
+
+On the wire it is two server→admin messages: a one-time `admin_log_history`
+(recent entries, sent right after auth) and a live `admin_log` per new event. The
+client layer accumulates both into `useReactorQueueAdmin().logs` (oldest → newest,
+capped client-side), so a dashboard just maps over `logs`. The server keeps a
+bounded ring buffer (last 200 events) in durable storage, so an admin connecting
+after the fact still sees recent history — and it survives hibernation. Logging
+only persists/streams when admin mode is enabled; the server **console** always
+gets every event regardless.
+
+Everything funnels through one server-side `log(level, event, message, …)` helper,
+so adding a logged event is a single call. Errors additionally fire the
+[`onError`](#configuration-server) hook for your own metrics pipeline.
+
+#### Diagnosing session-creation failures
+
+The most useful thing the log surfaces is **why the Reactor API rejected a
+request**. A failed `POST /sessions` (or token mint, or stop) throws a
+[`CoordinatorError`](./packages/server/src/coordinator.ts) carrying the endpoint,
+HTTP status, and response body, which the log records verbatim under
+`event: "session_create_failed"`:
+
+```jsonc
+{
+  "level": "error",
+  "event": "session_create_failed",
+  "message": "POST /sessions failed: 403 {\"error\":\"quota exceeded: 5 concurrent sessions\"}",
+  "connId": "abc123",
+  "data": {
+    "endpoint": "POST /sessions",
+    "status": 403,
+    "body": "{\"error\":\"quota exceeded: 5 concurrent sessions\"}",
+  },
+}
+```
+
+So when the queue caps out at a number that isn't your `maxSessions` — e.g. your
+**account's** concurrent-session quota is lower than the queue's ceiling — the
+admin log shows it plainly (`status: 403`, the quota message in `body`) instead of
+a silent stall. The browser client never sees this detail; it only gets a generic
+`error` with `session_create_failed`.
 
 ## Overriding session lifecycle
 
