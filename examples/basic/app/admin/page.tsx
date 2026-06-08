@@ -2,7 +2,12 @@
 
 import { CSSProperties, useState } from "react";
 import Link from "next/link";
-import { ReactorQueueAdminProvider, useReactorQueueAdmin } from "@reactor-team/queue/admin/react";
+import {
+  ReactorQueueAdminProvider,
+  useReactorQueueAdmin,
+  type AdminLogEntry,
+  type AdminLogLevel,
+} from "@reactor-team/queue/admin/react";
 
 const PARTYKIT_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST;
 
@@ -306,8 +311,67 @@ function Dashboard({ onDisconnect }: { onDisconnect: () => void }) {
           )}
         </Card>
       </section>
+
+      {/* Activity log — events streamed live from the server over the admin socket */}
+      <section style={s.section}>
+        <h2 style={s.h2}>Activity log ({admin.logs.length})</h2>
+        <LogPanel logs={admin.logs} />
+      </section>
     </Shell>
   );
+}
+
+// Newest-first event stream. Errors (e.g. a Coordinator quota rejection) expand
+// to show the API status + body so failures are diagnosable from the dashboard.
+function LogPanel({ logs }: { logs: AdminLogEntry[] }) {
+  if (logs.length === 0) {
+    return (
+      <Card>
+        <p style={s.muted}>No events yet. Activity appears here as users join, claim, and leave.</p>
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <div style={s.logList}>
+        {[...logs].reverse().map((entry) => (
+          <LogRow key={entry.id} entry={entry} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+const LOG_COLOR: Record<AdminLogLevel, string> = {
+  info: "#60a5fa",
+  warn: "#fbbf24",
+  error: "#f87171",
+};
+
+function LogRow({ entry }: { entry: AdminLogEntry }) {
+  const color = LOG_COLOR[entry.level];
+  const time = new Date(entry.at).toLocaleTimeString();
+  return (
+    <div style={s.logRow}>
+      <span style={{ ...s.logDot, background: color }} />
+      <span style={s.logTime}>{time}</span>
+      <div style={s.logBody}>
+        <div style={s.logHead}>
+          <span style={{ ...s.logEvent, color }}>{entry.event}</span>
+          {entry.connId && <span style={s.logChip}>conn {shortId(entry.connId)}</span>}
+          {entry.sessionId && <span style={s.logChip}>session {shortId(entry.sessionId)}</span>}
+        </div>
+        <div style={s.logMessage}>{entry.message}</div>
+        {entry.data && <pre style={s.logData}>{formatLogData(entry.data)}</pre>}
+      </div>
+    </div>
+  );
+}
+
+function formatLogData(data: Record<string, unknown>): string {
+  return Object.entries(data)
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join("\n");
 }
 
 function BigNumber({
@@ -550,6 +614,52 @@ const s: Record<string, CSSProperties> = {
   },
   queuePos: { fontSize: 14, fontWeight: 600, color: "#d9b15e", minWidth: 36 },
   queueClient: { flex: 1, fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#71717a" },
+  logList: { display: "flex", flexDirection: "column", gap: 2, maxHeight: 420, overflowY: "auto" },
+  logRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: "8px 4px",
+    borderBottom: "1px solid #1f1f23",
+  },
+  logDot: { width: 8, height: 8, borderRadius: 999, marginTop: 6, flexShrink: 0 },
+  logTime: {
+    fontFamily: "ui-monospace, monospace",
+    fontSize: 11,
+    color: "#71717a",
+    marginTop: 2,
+    flexShrink: 0,
+  },
+  logBody: { flex: 1, minWidth: 0 },
+  logHead: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  logEvent: {
+    fontFamily: "ui-monospace, monospace",
+    fontSize: 12,
+    fontWeight: 600,
+    letterSpacing: 0.2,
+  },
+  logChip: {
+    fontFamily: "ui-monospace, monospace",
+    fontSize: 10,
+    color: "#a1a1aa",
+    background: "rgba(0,0,0,0.3)",
+    borderRadius: 5,
+    padding: "1px 6px",
+  },
+  logMessage: { fontSize: 13, color: "#d4d4d8", marginTop: 2, lineHeight: 1.4 },
+  logData: {
+    margin: "6px 0 0",
+    padding: "8px 10px",
+    background: "rgba(0,0,0,0.35)",
+    border: "1px solid #3f1d1d",
+    borderRadius: 6,
+    fontFamily: "ui-monospace, monospace",
+    fontSize: 11,
+    color: "#fca5a5",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflowX: "auto",
+  },
   spinner: {
     display: "inline-block",
     width: 24,

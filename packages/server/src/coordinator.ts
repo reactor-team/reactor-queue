@@ -1,6 +1,26 @@
 import { TERMINAL_SESSION_STATES } from "@reactor-team/queue-protocol";
 
 /**
+ * Raised when the Coordinator answers a request with a non-OK status. Carries
+ * the `endpoint`, HTTP `status`, and raw response `body` so callers (and the
+ * admin log) can show *why* a call failed — a quota rejection, an expired key,
+ * a bad model — instead of a generic "session create failed".
+ */
+export class CoordinatorError extends Error {
+  readonly endpoint: string;
+  readonly status: number;
+  readonly body: string;
+
+  constructor(endpoint: string, status: number, body: string) {
+    super(`${endpoint} failed: ${status} ${body || "(no body)"}`);
+    this.name = "CoordinatorError";
+    this.endpoint = endpoint;
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
  * Thin server-side client for the Reactor Coordinator REST API. From inside the
  * trusted PartyKit server it:
  *
@@ -52,7 +72,7 @@ export class CoordinatorClient {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => res.statusText);
-      throw new Error(`mintToken failed: ${res.status} ${detail}`);
+      throw new CoordinatorError("POST /tokens", res.status, detail);
     }
 
     const data = (await res.json()) as { jwt?: string; token?: string; expires_at?: number };
@@ -129,7 +149,7 @@ export class CoordinatorClient {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => res.statusText);
-      throw new Error(`createSession failed: ${res.status} ${detail}`);
+      throw new CoordinatorError("POST /sessions", res.status, detail);
     }
 
     const data = (await res.json()) as { session_id?: string };
@@ -152,7 +172,7 @@ export class CoordinatorClient {
     });
     if (!res.ok && res.status !== 404) {
       const detail = await res.text().catch(() => res.statusText);
-      throw new Error(`stopSession failed: ${res.status} ${detail}`);
+      throw new CoordinatorError(`DELETE /sessions/${sessionId}`, res.status, detail);
     }
   }
 }

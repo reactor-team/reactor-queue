@@ -65,7 +65,10 @@ behind yourself.
 
 - `app/page.tsx` — the entire client: `<ReactorQueueProvider>`, a phase switch,
   the gated `<ReactorProvider getJwt={queue.getJwt}>`, and `SessionBridge`.
-- `app/admin/page.tsx` — live queue dashboard (kick members, force-close sessions).
+- `app/admin/page.tsx` — live queue dashboard: stats, per-session controls (kick
+  members, force-close sessions), and a streaming **activity log** (events and
+  errors pushed live over the admin socket — e.g. a Coordinator quota rejection
+  shows its HTTP status and body).
 
 ## Deploy
 

@@ -1,5 +1,5 @@
 export { createReactorQueueServer } from "./server";
-export { CoordinatorClient } from "./coordinator";
+export { CoordinatorClient, CoordinatorError } from "./coordinator";
 export type {
   ReactorQueueServerConfig,
   ReactorQueueServerHooks,

@@ -4,13 +4,41 @@ import {
   CLIENT_ID_QUERY_KEY,
   parseAdminClientMessage,
   parseClientMessage,
+  type AdminLogEntry,
+  type AdminLogLevel,
   type AdminServerMessage,
   type ServerMessage,
 } from "@reactor-team/queue-protocol";
 import { buildAdminSnapshot } from "./admin-snapshot";
 import { resolveConfig, type ReactorQueueServerConfig, type ResolvedConfig } from "./config";
 import type { ReleaseSessionContext } from "./config";
-import { CoordinatorClient } from "./coordinator";
+import { CoordinatorClient, CoordinatorError } from "./coordinator";
+
+/** Max activity-log entries kept in the room's durable ring buffer. */
+const MAX_LOG_ENTRIES = 200;
+
+/**
+ * Turn an arbitrary thrown value into a log-friendly message + structured data.
+ * A {@link CoordinatorError} surfaces the endpoint, HTTP status, and (truncated)
+ * response body — so an admin sees *why* the Reactor API said no (quota, expired
+ * key, bad model, …) rather than an opaque failure.
+ */
+function describeError(error: unknown): { message: string; data?: Record<string, unknown> } {
+  if (error instanceof CoordinatorError) {
+    const body = error.body.length > 2000 ? `${error.body.slice(0, 2000)}…` : error.body;
+    return {
+      message: error.message,
+      data: { endpoint: error.endpoint, status: error.status, body },
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      data: error.name && error.name !== "Error" ? { name: error.name } : undefined,
+    };
+  }
+  return { message: String(error) };
+}
 
 /** Per admitted member. Lives in durable storage under `member:<connId>`. */
 interface MemberData {
@@ -67,6 +95,9 @@ export function createReactorQueueServer(
     // never across the hibernation boundary, so no in-memory timer is needed.
     private positionsDirty = false;
     private adminDirty = false;
+    // Structured events produced during the current handler. Flushed (persisted
+    // to the ring buffer + streamed to admins) once, alongside the broadcasts.
+    private pendingLogs: AdminLogEntry[] = [];
 
     constructor(readonly room: Party.Room) {}
 
@@ -117,13 +148,76 @@ export function createReactorQueueServer(
       }
     }
 
-    private reportError(where: string, error: unknown) {
-      console.error(`[reactor-queue] ${where}`, error);
+    /**
+     * Log a non-fatal error as a structured `error` event (visible in the admin
+     * activity log, with the API status/body for {@link CoordinatorError}) and
+     * fire the `onError` hook. `where` doubles as the event code.
+     */
+    private reportError(
+      where: string,
+      error: unknown,
+      opts: { connId?: string; sessionId?: string } = {}
+    ) {
+      const { message, data } = describeError(error);
+      this.log("error", where, message, { ...opts, data });
       try {
         this.config.hooks.onError?.(where, error);
       } catch {
         /* hook must never throw the server over */
       }
+    }
+
+    /** Write a structured line to the server console, nothing else. */
+    private writeConsole(
+      level: AdminLogLevel,
+      event: string,
+      message: string,
+      data?: Record<string, unknown>
+    ): void {
+      const line = `[reactor-queue] ${event}: ${message}`;
+      const ctx = data ?? "";
+      if (level === "error") console.error(line, ctx);
+      else if (level === "warn") console.warn(line, ctx);
+      else console.log(line, ctx);
+    }
+
+    /**
+     * Record one structured server event. Always writes to the server console;
+     * when admin mode is enabled (`adminPassword` set) it is also queued for the
+     * admin stream. This is the single place server events become visible — call
+     * it wherever something notable happens.
+     *
+     * Only console + in-memory work happens here; the persist/broadcast is
+     * deferred to `flushBroadcasts()` so it lands inside the handler turn
+     * (hibernation-safe) and coalesces with the queue/admin broadcasts. There,
+     * `info` events are streamed to live admins only, while `warn`/`error` are
+     * also written to the durable ring buffer — so the high-frequency hot path
+     * (connects/disconnects) never touches storage, but failures stay in history.
+     *
+     * Do **not** use this for connection rejections (forbidden origin, duplicate
+     * tab): those are unauthenticated and attacker-driven, so queuing them would
+     * let a flood drive admin-stream work. Log rejections with `writeConsole`.
+     */
+    private log(
+      level: AdminLogLevel,
+      event: string,
+      message: string,
+      opts: { connId?: string; sessionId?: string; data?: Record<string, unknown> } = {}
+    ): void {
+      this.writeConsole(level, event, message, opts.data);
+
+      // Only pay the stream/storage cost when an operator can actually read it.
+      if (!this.config.adminPassword) return;
+      this.pendingLogs.push({
+        id: this.genId(),
+        at: Date.now(),
+        level,
+        event,
+        message,
+        ...(opts.connId ? { connId: opts.connId } : {}),
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        ...(opts.data ? { data: opts.data } : {}),
+      });
     }
 
     // ── storage helpers ────────────────────────────────────────────────────
@@ -313,11 +407,47 @@ export function createReactorQueueServer(
       this.adminDirty = true;
     }
 
-    private async broadcastAdminSnapshots(): Promise<void> {
-      const admins = await this.getActiveAdminConnIds();
+    private async broadcastAdminSnapshots(admins: string[]): Promise<void> {
       if (admins.length === 0) return;
       const snapshot = await this.buildSnapshot();
       for (const connId of admins) this.sendAdminTo(connId, snapshot);
+    }
+
+    // ── activity log: bounded ring buffer + live admin stream ────────────────
+    // One key per entry (`log:<padded seq>`) with `logseq` (next) and `logmin`
+    // (oldest) counters, mirroring the queue's storage model: appends are O(1),
+    // history survives hibernation, and the buffer self-trims to MAX_LOG_ENTRIES.
+
+    private logKey(seq: number): string {
+      return `log:${String(seq).padStart(16, "0")}`;
+    }
+
+    /** Append entries to the durable ring buffer, trimming the oldest past the cap. */
+    private async persistLogs(entries: AdminLogEntry[]): Promise<void> {
+      let seq = (await this.room.storage.get<number>("logseq")) ?? 0;
+      let min = (await this.room.storage.get<number>("logmin")) ?? 0;
+      for (const entry of entries) {
+        await this.room.storage.put(this.logKey(seq), entry);
+        seq++;
+      }
+      await this.room.storage.put("logseq", seq);
+      while (seq - min > MAX_LOG_ENTRIES) {
+        await this.room.storage.delete(this.logKey(min));
+        min++;
+      }
+      await this.room.storage.put("logmin", min);
+    }
+
+    /** Recent log entries in chronological order (oldest → newest). */
+    private async listLogHistory(): Promise<AdminLogEntry[]> {
+      const items = await this.room.storage.list<AdminLogEntry>({ prefix: "log:" });
+      return [...items.values()];
+    }
+
+    private broadcastLogs(admins: string[], entries: AdminLogEntry[]): void {
+      for (const connId of admins) {
+        for (const entry of entries) this.sendAdminTo(connId, { type: "admin_log", entry });
+      }
     }
 
     private async adminKickMember(connId: string): Promise<{ ok: boolean; message?: string }> {
@@ -325,6 +455,10 @@ export function createReactorQueueServer(
       if (!member) return { ok: false, message: "member_not_found" };
       await this.releaseMember(connId, member, "server", { notify: true });
       await this.tryAdmitNext();
+      this.log("warn", "admin_kick_member", "Admin evicted an admitted member", {
+        connId,
+        sessionId: member.sessionId ?? undefined,
+      });
       this.scheduleAdminBroadcast();
       return { ok: true };
     }
@@ -340,6 +474,9 @@ export function createReactorQueueServer(
           /* already gone */
         }
       }
+      this.log("warn", "admin_kick_queued", "Admin removed a waiting user from the queue", {
+        connId,
+      });
       this.scheduleBroadcast();
       this.scheduleAdminBroadcast();
       return { ok: true };
@@ -364,6 +501,7 @@ export function createReactorQueueServer(
       }
 
       await this.tryAdmitNext();
+      this.log("warn", "admin_close_session", "Admin force-closed a session", { sessionId });
       this.scheduleAdminBroadcast();
       return { ok: true };
     }
@@ -392,6 +530,18 @@ export function createReactorQueueServer(
           } else {
             this.send(conn, { type: "rejected", reason: "forbidden_origin" });
           }
+          // Console-only: an unauthenticated origin flood must not be able to
+          // drive admin-stream/storage work — that would amplify the very abuse
+          // the allow-list exists to reject cheaply.
+          this.writeConsole(
+            "warn",
+            "forbidden_origin",
+            "Rejected a connection from a disallowed origin",
+            {
+              origin: ctx.request.headers.get("origin") ?? null,
+              admin: isAdmin,
+            }
+          );
           conn.close(1008, "forbidden_origin");
           return;
         }
@@ -416,6 +566,14 @@ export function createReactorQueueServer(
               // No app-level heartbeat needed; `onClose` cleans the mapping.
               if (this.room.getConnection(entry.connId)) {
                 this.send(conn, { type: "rejected", reason: "already_connected" });
+                // Console-only (same reasoning as forbidden_origin): a rejection
+                // path must stay cheap and not feed the admin stream/storage.
+                this.writeConsole(
+                  "warn",
+                  "duplicate_rejected",
+                  "Rejected a duplicate connection (same browser already connected in another tab)",
+                  { connId: conn.id }
+                );
                 conn.close(1008, "already_connected");
                 return;
               }
@@ -428,6 +586,9 @@ export function createReactorQueueServer(
 
         await this.enqueue(conn.id);
         this.config.hooks.onUserConnected?.(conn.id);
+        this.log("info", "user_connected", "User connected and joined the queue", {
+          connId: conn.id,
+        });
         await this.tryAdmitNext();
         this.scheduleAdminBroadcast();
         await this.flushBroadcasts();
@@ -471,6 +632,7 @@ export function createReactorQueueServer(
         }
 
         this.config.hooks.onUserDisconnected?.(conn.id);
+        this.log("info", "user_disconnected", "User connection closed", { connId: conn.id });
         await this.flushBroadcasts();
       } catch (err) {
         this.reportError("onClose", err);
@@ -497,6 +659,10 @@ export function createReactorQueueServer(
             await this.room.storage.put(this.adminKey(sender.id), "active");
             this.sendAdmin(sender, { type: "admin_ready" });
             this.sendAdmin(sender, await this.buildSnapshot());
+            this.sendAdmin(sender, {
+              type: "admin_log_history",
+              entries: await this.listLogHistory(),
+            });
             return;
           }
 
@@ -626,6 +792,10 @@ export function createReactorQueueServer(
           if (CoordinatorClient.isTerminal(state)) {
             // Session already ended on the platform; releasing each member empties
             // and deletes the slot. The default release's DELETE is a no-op (404).
+            this.log("info", "session_reaped", "Session ended on the platform; freeing the slot", {
+              sessionId: slot.sessionId,
+              data: { state },
+            });
             for (const connId of [...slot.members]) {
               const member = await this.getMember(connId);
               if (member) {
@@ -736,6 +906,14 @@ export function createReactorQueueServer(
             graceMs: this.config.admissionGraceMs,
             sessionDurationMs: this.config.sessionDurationMs,
           });
+          this.log(
+            "info",
+            "user_admitted",
+            "User reached the front and was admitted (slot reserved, no session yet)",
+            {
+              connId,
+            }
+          );
           // Token can be minted now (it's not session-scoped); the SDK uses it
           // after claim. getJwt/request_token keep it fresh.
           const conn = this.room.getConnection(connId);
@@ -775,13 +953,17 @@ export function createReactorQueueServer(
         try {
           sessionId = await this.runAcquire(this.config.model);
         } catch (err) {
-          this.reportError("acquireSession", err);
+          // The most important failure to surface: e.g. the account hit its
+          // concurrent-session quota, the key expired, or the model is wrong.
+          // describeError pulls the Coordinator's HTTP status + body into `data`.
+          this.reportError("session_create_failed", err, { connId });
           await this.setMember(connId, { ...member, claiming: false });
           this.sendTo(connId, { type: "error", message: "session_create_failed" });
           return;
         }
         await this.setSlot({ ...slot, sessionId });
         this.config.hooks.onSessionCreated?.(sessionId);
+        this.log("info", "session_created", "Created a new Reactor session", { connId, sessionId });
       }
 
       const expiresAt = Date.now() + this.config.sessionDurationMs;
@@ -801,6 +983,10 @@ export function createReactorQueueServer(
         expiresAt,
       });
       this.config.hooks.onUserEnteredSession?.(connId, sessionId);
+      this.log("info", "session_ready", "User claimed and entered the session", {
+        connId,
+        sessionId,
+      });
       await this.scheduleNextAlarm();
       this.scheduleAdminBroadcast();
     }
@@ -832,6 +1018,17 @@ export function createReactorQueueServer(
         this.sendTo(connId, { type: "expired", reason });
       }
 
+      if (reason === "timeout") {
+        this.log("info", "session_timeout", "Session time elapsed; reclaiming the slot", {
+          connId,
+          sessionId: data.sessionId ?? undefined,
+        });
+      } else if (reason === "grace_timeout") {
+        this.log("info", "grace_timeout", "Admitted user did not claim in time; slot reclaimed", {
+          connId,
+        });
+      }
+
       const slot = await this.getSlot(data.slotId);
       if (slot) {
         const nextMembers = slot.members.filter((id) => id !== connId);
@@ -848,7 +1045,13 @@ export function createReactorQueueServer(
 
         if (lastMember) {
           await this.deleteSlot(slot.slotId);
-          if (slot.sessionId) this.config.hooks.onSessionClosed?.(slot.sessionId, reason);
+          if (slot.sessionId) {
+            this.config.hooks.onSessionClosed?.(slot.sessionId, reason);
+            this.log("info", "session_closed", "Reactor session closed (last member left)", {
+              sessionId: slot.sessionId,
+              data: { reason },
+            });
+          }
           this.scheduleAdminBroadcast();
         } else {
           await this.setSlot({ ...slot, members: nextMembers });
@@ -880,12 +1083,36 @@ export function createReactorQueueServer(
           this.reportError("broadcast", err);
         }
       }
-      if (this.adminDirty) {
-        this.adminDirty = false;
-        try {
-          await this.broadcastAdminSnapshots();
-        } catch (err) {
-          this.reportError("adminBroadcast", err);
+      const haveLogs = this.pendingLogs.length > 0;
+      if (this.adminDirty || haveLogs) {
+        // Resolve the active admin set once: the snapshot push and the log stream
+        // both target it, so we don't scan `admin:` twice per flush.
+        const admins = await this.getActiveAdminConnIds();
+
+        if (this.adminDirty) {
+          this.adminDirty = false;
+          try {
+            await this.broadcastAdminSnapshots(admins);
+          } catch (err) {
+            this.reportError("adminBroadcast", err);
+          }
+        }
+
+        if (haveLogs) {
+          const batch = this.pendingLogs;
+          this.pendingLogs = [];
+          try {
+            // Persist only warn/error — the rare, diagnostic history (kept even
+            // with no admin watching, so it's there when one connects). `info`
+            // is streamed to live admins but never written to storage, so the
+            // high-frequency connect/disconnect hot path stays storage-free.
+            const durable = batch.filter((e) => e.level !== "info");
+            if (durable.length > 0) await this.persistLogs(durable);
+            this.broadcastLogs(admins, batch);
+          } catch (err) {
+            // Never route through reportError → log() (would re-enqueue and recurse).
+            console.error("[reactor-queue] logFlush", err);
+          }
         }
       }
     }

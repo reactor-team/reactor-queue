@@ -7,6 +7,7 @@ import {
 } from "@reactor-team/queue-protocol";
 import {
   INITIAL_ADMIN_STATE,
+  MAX_CLIENT_LOGS,
   type AdminPasswordSource,
   type AdminState,
   type ReactorQueueAdminClientOptions,
@@ -144,6 +145,12 @@ export class ReactorQueueAdminClient {
         break;
       case "admin_action_result":
         this.setState({ lastAction: msg });
+        break;
+      case "admin_log_history":
+        this.setState({ logs: msg.entries.slice(-MAX_CLIENT_LOGS) });
+        break;
+      case "admin_log":
+        this.setState({ logs: [...this.state.logs, msg.entry].slice(-MAX_CLIENT_LOGS) });
         break;
     }
   }
