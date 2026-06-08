@@ -30,31 +30,43 @@ web app. Locally, `partykit dev` gives you the room and your dev server the app.
 
 ### 1. Server (PartyKit)
 
+Configure the queue in one place — this `createReactorQueueServer` call _is_ the
+server. Each option is typed and documented; nothing is duplicated elsewhere:
+
 ```ts
 // partykit/server.ts
 import { createReactorQueueServer } from "@reactor-team/queue-server";
 
-export default createReactorQueueServer({ model: "helios", maxSessions: 3 });
+export default createReactorQueueServer({
+  model: "helios", // model the queue opens sessions for
+  maxSessions: 3, // concurrent GPU sessions — your capacity ceiling
+  sessionDurationMs: 120_000, // how long each turn lasts
+});
 ```
 
+`partykit.json` is just PartyKit plumbing — no queue config to keep in sync:
+
 ```jsonc
-// partykit.json — non-secret tunables (env wins over code, no redeploy of code)
+// partykit.json
 {
   "name": "my-demo-queue",
   "main": "partykit/server.ts",
   "compatibilityDate": "2024-11-01",
-  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" },
 }
 ```
 
+The Reactor API key is the one value that must **not** live in code — it's a
+secret. Put it in `.env` (auto-loaded by `partykit dev`):
+
 ```bash
-echo "RQ_REACTOR_API_KEY=rk_your_key_here" >> .env   # server-only secret
-npx partykit dev                                      # → http://127.0.0.1:1999
+echo "RQ_REACTOR_API_KEY=rk_your_key_here" >> .env
+npx partykit dev   # → http://127.0.0.1:1999
 ```
 
-The API key lives **only** on the server — the browser only ever sees the
-short-lived JWTs minted from it. `.env` is auto-loaded by `partykit dev`; to go
-live see [Deployment](#deployment).
+That's the whole split: **behavior in code, secrets in `.env`.** Every option
+also has an `RQ_*` env-var twin if you ever need to override one per-deploy
+without editing code (see [Configuration](#configuration-server)) — but you
+don't need any of that to start. To go live, see [Deployment](#deployment).
 
 ### 2. Client (React)
 
@@ -162,13 +174,14 @@ npx partykit deploy --with-vars
 (Or keep the secret in a local `.env` and let `--with-vars` upload it at deploy
 time — the same `.env` that `partykit dev` reads.)
 
-Non-secret tuning (`RQ_MODEL`, `RQ_MAX_SESSIONS`, durations) lives in
-`partykit.json` `vars`; env always wins over the value baked into
-`createReactorQueueServer({...})`, so you can retune a live room without a code
-change. For anything public, harden the defaults: drop
-`RQ_ALLOW_DUPLICATE_CONNECTIONS`, set `RQ_ALLOWED_ORIGINS` to your site(s), and
-size `RQ_MAX_SESSIONS` to the model's real GPU ceiling. Then point your web app
-at the deployed host and deploy the app wherever it lives (Vercel, etc.).
+Your queue settings live in code (the `createReactorQueueServer({...})` call).
+Any of them can still be overridden at deploy time by the matching `RQ_*` env var
+— non-secret overrides go in `partykit.json` `vars`, secrets via
+`partykit secret` — so you can retune a deploy without editing code. For anything
+public, harden the demo defaults: drop `allowDuplicateConnections`, set
+`allowedOrigins` to your site(s), and size `maxSessions` to the model's real GPU
+ceiling. Then point your web app at the deployed host and deploy the app wherever
+it lives (Vercel, etc.).
 
 ### Your own Cloudflare account (cloud-prem)
 
@@ -382,8 +395,11 @@ autoConnect>` connects on mount and disconnects on cleanup; React StrictMode
 
 ## Configuration (server)
 
-All values resolve as **default → `createReactorQueueServer({...})` → env var**
-(env wins, for redeploy-free tuning). The API key must come from a secret.
+Configure the server in code via `createReactorQueueServer({...})` — that's the
+normal place. Each option _also_ reads from an env var that **overrides** the
+code value, so a deploy can be retuned without a code change. Values resolve
+**default → `createReactorQueueServer({...})` → env var** (env wins). The API key
+must come from a secret, never code.
 
 | Env var                          | Config key                  | Default                   | Purpose                                                                                                            |
 | -------------------------------- | --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
