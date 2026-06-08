@@ -18,9 +18,9 @@ typed SDK (or the base `Reactor`) and your existing controls work unchanged.
 
 ## Run it
 
-The example pins `@reactor-team/js-sdk` via a root `pnpm.overrides` link to
-`../js-sdk` so `connectOptions.sessionId` type-checks before that API ships on
-npm (js-sdk PR #189). Remove the override once a release includes it.
+The example uses the published `@reactor-team/js-sdk` (2.11.2+), which is where
+`connectOptions.sessionId` — the API the queue attaches with — shipped. No local
+link or override is needed.
 
 From the **repo root** (build the workspace packages first):
 
