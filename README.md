@@ -13,6 +13,203 @@ server owns `POST /sessions`; browsers attach with `connect({ sessionId })`
 instead of creating their own sessions. It is a thin utility on top of the
 public Reactor REST API; it does not replace or fork anything.
 
+## Packages
+
+| Package                                               | What it is                                                                        | You install it…          |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------ |
+| [`@reactor-team/queue`](./packages/client)            | Client: framework-agnostic `ReactorQueueClient` + React/zustand layer (`./react`) | in your web app          |
+| [`@reactor-team/queue-server`](./packages/server)     | The PartyKit `Server` factory                                                     | in your PartyKit project |
+| [`@reactor-team/queue-protocol`](./packages/protocol) | Shared wire types + defaults (transitive)                                         | automatically            |
+
+---
+
+## Quickstart
+
+Two pieces: a **server** you run on PartyKit and a **client** you mount in your
+web app. Locally, `partykit dev` gives you the room and your dev server the app.
+
+### 1. Server (PartyKit)
+
+Configure the queue in one place — this `createReactorQueueServer` call _is_ the
+server. Each option is typed and documented; nothing is duplicated elsewhere:
+
+```ts
+// partykit/server.ts
+import { createReactorQueueServer } from "@reactor-team/queue-server";
+
+export default createReactorQueueServer({
+  model: "helios", // model the queue opens sessions for
+  maxSessions: 3, // concurrent GPU sessions — your capacity ceiling
+  sessionDurationMs: 120_000, // how long each turn lasts
+});
+```
+
+`partykit.json` is just PartyKit plumbing — no queue config to keep in sync:
+
+```jsonc
+// partykit.json
+{
+  "name": "my-demo-queue",
+  "main": "partykit/server.ts",
+  "compatibilityDate": "2024-11-01",
+}
+```
+
+The Reactor API key is the one value that must **not** live in code — it's a
+secret. Put it in `.env` (auto-loaded by `partykit dev`):
+
+```bash
+echo "RQ_REACTOR_API_KEY=rk_your_key_here" >> .env
+npx partykit dev   # → http://127.0.0.1:1999
+```
+
+That's the whole split: **behavior in code, secrets in `.env`.** Every option
+also has an `RQ_*` env-var twin if you ever need to override one per-deploy
+without editing code (see [Configuration](#configuration-server)) — but you
+don't need any of that to start. To go live, see [Deployment](#deployment).
+
+### 2. Client (React)
+
+Requires [`@reactor-team/js-sdk`](https://github.com/reactor-team/js-sdk)
+**2.11.2+** (for `ConnectOptions.sessionId`).
+
+```tsx
+import { ReactorQueueProvider, useReactorQueue } from "@reactor-team/queue/react";
+import { ReactorProvider } from "@reactor-team/js-sdk";
+
+export default function App() {
+  return (
+    <ReactorQueueProvider host={process.env.NEXT_PUBLIC_PARTYKIT_HOST!}>
+      <Gate />
+    </ReactorQueueProvider>
+  );
+}
+
+function Gate() {
+  const q = useReactorQueue();
+  if (q.phase === "queued")
+    return (
+      <p>
+        Position {q.position} of {q.total}
+      </p>
+    );
+  if (q.phase === "admitted") return <button onClick={q.claim}>Enter</button>;
+  if (q.phase === "expired") return <button onClick={q.rejoin}>Rejoin</button>;
+  if (q.phase !== "active" || !q.sessionId) return null;
+
+  return (
+    <ReactorProvider
+      modelName="helios"
+      getJwt={q.getJwt}
+      connectOptions={{ autoConnect: true, sessionId: q.sessionId }}
+    >
+      <SessionBridge />
+      {/* your model UI */}
+    </ReactorProvider>
+  );
+}
+
+// Free the queue slot when the user leaves the demo.
+function SessionBridge() {
+  const { endSession } = useReactorQueue();
+  React.useEffect(() => () => endSession(), [endSession]);
+  return null;
+}
+```
+
+The two integration points are `getJwt={q.getJwt}` and
+`connectOptions.sessionId` — everything else is your normal model UI. See
+[`examples/basic`](./examples/basic) for the complete, runnable version
+(`app/page.tsx` is the whole thing).
+
+### Vanilla JS (no React)
+
+The same client without the React layer — drive your own UI from `subscribe`:
+
+```ts
+import { ReactorQueueClient } from "@reactor-team/queue";
+import { Reactor } from "@reactor-team/js-sdk";
+
+const queue = new ReactorQueueClient({ host: PARTYKIT_HOST, autoConnect: true });
+queue.subscribe((s) => render(s)); // s.phase, s.position, …
+
+// when the user claims and you want to connect:
+queue.claim();
+const reactor = new Reactor({ modelName: "helios" });
+await reactor.connect(queue.getJwt, { sessionId: queue.getState().sessionId! });
+// …later
+await reactor.disconnect();
+queue.endSession();
+```
+
+---
+
+## Deployment
+
+The queue is **two separately-shipped pieces**: the PartyKit server (this
+library) and your own web app. The browser bundle talks to the deployed PartyKit
+room over WebSocket; the room talks to Reactor over REST. Your web app is **not**
+where the queue runs — the server is its own deploy.
+
+### The PartyKit server
+
+`createReactorQueueServer()` is a PartyKit server, which compiles to a
+Cloudflare Durable Object — a stateful edge process, not part of your Next.js /
+web bundle. You publish it with the PartyKit CLI. A deploy gives you a host like
+`my-demo-queue.<your-username>.partykit.dev`, and that host string is exactly
+what the client takes as its `host` prop (`NEXT_PUBLIC_PARTYKIT_HOST`).
+
+The Reactor API key is a **server secret** and must never reach the browser.
+Push it (and any other secrets, like `RQ_ADMIN_PASSWORD`) to PartyKit, then deploy:
+
+```bash
+# Store secrets once (prompts for the value); kept out of partykit.json:
+npx partykit secret put RQ_REACTOR_API_KEY
+npx partykit secret put RQ_ADMIN_PASSWORD     # only if you use admin mode
+
+# Deploy. `--with-vars` also uploads the non-secret `vars` from partykit.json.
+npx partykit deploy --with-vars
+```
+
+(Or keep the secret in a local `.env` and let `--with-vars` upload it at deploy
+time — the same `.env` that `partykit dev` reads.)
+
+Your queue settings live in code (the `createReactorQueueServer({...})` call).
+Any of them can still be overridden at deploy time by the matching `RQ_*` env var
+— non-secret overrides go in `partykit.json` `vars`, secrets via
+`partykit secret` — so you can retune a deploy without editing code. For anything
+public, harden the demo defaults: drop `allowDuplicateConnections`, set
+`allowedOrigins` to your site(s), and size `maxSessions` to the model's real GPU
+ceiling. Then point your web app at the deployed host and deploy the app wherever
+it lives (Vercel, etc.).
+
+### Your own Cloudflare account (cloud-prem)
+
+By default PartyKit deploys to its **managed** platform (the `*.partykit.dev`
+host above). Because PartyKit is built on Cloudflare Workers, you can instead
+deploy the **same server** to your **own Cloudflare account** — its
+[cloud-prem](https://docs.partykit.io/guides/deploy-to-cloudflare/) mode. Reach
+for it when you have regulatory requirements, want the room on a domain you
+already run on Cloudflare, or want it alongside your existing Workers/services.
+The PartyKit platform fee is waived for cloud-prem.
+
+Create a Cloudflare API token from the **Edit Cloudflare Workers** template,
+grab your account id, and pass both to `deploy` with a `--domain`:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=<account id> \
+CLOUDFLARE_API_TOKEN=<api token> \
+  npx partykit deploy --domain queue.yourdomain.com --with-vars
+```
+
+The server code and every `RQ_*` value are identical — only the deploy target
+changes. The client then connects to `queue.yourdomain.com` instead of the
+`*.partykit.dev` host. See PartyKit's
+[Deploy to your own Cloudflare account](https://docs.partykit.io/guides/deploy-to-cloudflare/)
+guide for token scopes and the full details.
+
+---
+
 ## Why this exists
 
 **Reactor does not gate demand for you.** The platform hands out sessions on
@@ -51,8 +248,6 @@ Reactor who needs to meter live access to a model:
 - **Reactor model partners** launching private/early-access demos _with_ Reactor
   (e.g. Overworld and similar) — capping a small-capacity model to a safe number
   of concurrent users while still letting a crowd line up.
-
----
 
 ## Mental model
 
@@ -127,130 +322,16 @@ still rolling out — default `1` matches current behavior.
 ### js-sdk requirement
 
 Clients must attach with
-[`ConnectOptions.sessionId`](https://github.com/reactor-team/js-sdk) (js-sdk
-PR #189 or later). Pass it through your provider:
+[`ConnectOptions.sessionId`](https://github.com/reactor-team/js-sdk), which
+shipped in `@reactor-team/js-sdk` **2.11.2**. Install that version (or later) and
+pass `sessionId` through your provider:
 
 ```tsx
 connectOptions={{ autoConnect: true, sessionId: q.sessionId }}
 ```
 
 The queue client sets `sessionId` from the `admitted` WebSocket message — there
-is no `reportSession()` or `session_started` wire message anymore.
-
-## Packages
-
-| Package                                               | What it is                                                                        | You install it…          |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------ |
-| [`@reactor-team/queue`](./packages/client)            | Client: framework-agnostic `ReactorQueueClient` + React/zustand layer (`./react`) | in your web app          |
-| [`@reactor-team/queue-server`](./packages/server)     | The PartyKit `Server` factory                                                     | in your PartyKit project |
-| [`@reactor-team/queue-protocol`](./packages/protocol) | Shared wire types + defaults (transitive)                                         | automatically            |
-
----
-
-## Quickstart
-
-### 1. Stand up the server (PartyKit)
-
-```ts
-// partykit/server.ts
-import { createReactorQueueServer } from "@reactor-team/queue-server";
-
-export default createReactorQueueServer({ model: "helios", maxSessions: 3 });
-```
-
-```jsonc
-// partykit.json
-{
-  "name": "my-demo-queue",
-  "main": "partykit/server.ts",
-  "compatibilityDate": "2024-11-01",
-  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" },
-}
-```
-
-```bash
-# local — put RQ_REACTOR_API_KEY in a .env file; `partykit dev` auto-loads it
-echo "RQ_REACTOR_API_KEY=rk_your_key_here" >> .env
-npx partykit dev
-
-# deploy — push the secret from .env with --with-vars
-npx partykit deploy --with-vars
-# (or store it in PartyKit once: `npx partykit env add RQ_REACTOR_API_KEY`, then `npx partykit deploy`)
-```
-
-The API key lives only on the server. It is **never** shipped to the browser —
-the browser only ever sees short-lived JWTs minted from it. (`.env` is loaded
-automatically by `partykit dev`; for deploy it's only uploaded with
-`--with-vars`.)
-
-### 2. Gate your app (React)
-
-```tsx
-import { ReactorQueueProvider, useReactorQueue } from "@reactor-team/queue/react";
-import { ReactorProvider, useReactor } from "@reactor-team/js-sdk";
-
-export default function App() {
-  return (
-    <ReactorQueueProvider host={process.env.NEXT_PUBLIC_PARTYKIT_HOST!}>
-      <Gate />
-    </ReactorQueueProvider>
-  );
-}
-
-function Gate() {
-  const q = useReactorQueue();
-  if (q.phase === "queued")
-    return (
-      <p>
-        Position {q.position} of {q.total}
-      </p>
-    );
-  if (q.phase === "admitted") return <button onClick={q.claim}>Enter</button>;
-  if (q.phase === "expired") return <button onClick={q.rejoin}>Rejoin</button>;
-  if (q.phase !== "active" || !q.sessionId) return null;
-
-  return (
-    <ReactorProvider
-      modelName="lingbot"
-      getJwt={q.getJwt}
-      connectOptions={{ autoConnect: true, sessionId: q.sessionId }}
-    >
-      <SessionBridge />
-      {/* your model UI */}
-    </ReactorProvider>
-  );
-}
-
-// Free the queue slot when the user leaves the demo.
-function SessionBridge() {
-  const { endSession } = useReactorQueue();
-  React.useEffect(() => () => endSession(), [endSession]);
-  return null;
-}
-```
-
-See [`examples/basic`](./examples/basic) for the complete, runnable version
-(one page, base SDK, its own PartyKit room) — `app/page.tsx` is the whole thing.
-
-### Vanilla JS (no React)
-
-```ts
-import { ReactorQueueClient } from "@reactor-team/queue";
-import { Reactor } from "@reactor-team/js-sdk";
-
-const queue = new ReactorQueueClient({ host: PARTYKIT_HOST, autoConnect: true });
-queue.subscribe((s) => render(s)); // s.phase, s.position, …
-
-// when the user claims and you want to connect:
-queue.claim();
-const reactor = new Reactor({ modelName: "lingbot" });
-await reactor.connect(queue.getJwt, { sessionId: queue.getState().sessionId! });
-// …later
-await reactor.disconnect();
-queue.endSession();
-```
-
----
+is no `reportSession()` or `session_started` wire message.
 
 ## Lifecycle / phases
 
@@ -314,8 +395,11 @@ autoConnect>` connects on mount and disconnects on cleanup; React StrictMode
 
 ## Configuration (server)
 
-All values resolve as **default → `createReactorQueueServer({...})` → env var**
-(env wins, for redeploy-free tuning). The API key must come from a secret.
+Configure the server in code via `createReactorQueueServer({...})` — that's the
+normal place. Each option _also_ reads from an env var that **overrides** the
+code value, so a deploy can be retuned without a code change. Values resolve
+**default → `createReactorQueueServer({...})` → env var** (env wins). The API key
+must come from a secret, never code.
 
 | Env var                          | Config key                  | Default                   | Purpose                                                                                                            |
 | -------------------------------- | --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |

@@ -104,26 +104,33 @@ You never call these directly — the queue does:
 
 ## 1. Server — a PartyKit room
 
+Configure the queue in code — `createReactorQueueServer({...})` is the one place.
+`partykit.json` is plumbing; secrets live in `.env`.
+
 ```ts
 // partykit/server.ts
 import { createReactorQueueServer } from "@reactor-team/queue-server";
-export default createReactorQueueServer({ model: "helios", maxSessions: 3 });
+
+export default createReactorQueueServer({
+  model: "helios",
+  maxSessions: 3,
+  sessionDurationMs: 120_000,
+});
 ```
 
 ```jsonc
-// partykit.json — non-secret tunables in `vars`. Secrets (API key, admin password) live in .env only.
+// partykit.json — PartyKit plumbing only; no queue config here.
 {
   "name": "my-demo-queue",
   "main": "partykit/server.ts",
   "compatibilityDate": "2024-11-01",
-  "vars": { "RQ_MODEL": "helios", "RQ_MAX_SESSIONS": "3", "RQ_SESSION_DURATION_MS": "120000" },
 }
 ```
 
 ```bash
-echo "RQ_REACTOR_API_KEY=rk_your_key_here" >> .env   # partykit dev auto-loads .env onto room.env
+echo "RQ_REACTOR_API_KEY=rk_your_key_here" >> .env   # secret; partykit dev auto-loads .env
 npx partykit dev
-npx partykit deploy --with-vars                       # uploads .env secrets → my-demo-queue.<user>.partykit.dev
+npx partykit deploy --with-vars                       # uploads the .env secret → my-demo-queue.<user>.partykit.dev
 ```
 
 ## 2. Client — gate the app (React)
@@ -223,8 +230,10 @@ just left. There is intentionally no `left` phase; track "you left — rejoin?" 
 
 ## Configuration (server)
 
-Resolution order: **built-in default → `createReactorQueueServer({...})` → env
-var** (env wins, for redeploy-free tuning). The API key MUST come from a secret.
+Configure in code via `createReactorQueueServer({...})`; each option also reads
+from an env var that overrides the code value (per-deploy tuning). Resolution
+order: **built-in default → `createReactorQueueServer({...})` → env var** (env
+wins). The API key MUST come from a secret, never code.
 
 | Env var                          | Config key                  | Default                   | Purpose                                      |
 | -------------------------------- | --------------------------- | ------------------------- | -------------------------------------------- |
