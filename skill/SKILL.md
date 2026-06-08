@@ -375,8 +375,11 @@ entry has `level` / `event` / `message` and optional `connId` / `sessionId` /
 `data`. Critically, a failed Reactor API call (e.g. a **quota rejection** on
 `POST /sessions`) is logged at `error` with the HTTP status and body in `data` —
 so "why won't it create more sessions?" is answerable from the dashboard. Server
-events are written via one `log()` helper and always hit the server console; the
-ring buffer + admin stream only run when admin mode is enabled.
+events are written via one `log()` helper and always hit the server console. With
+admin mode on, **all** levels stream live to admins, but only `warn`/`error` are
+persisted to the (hibernation-safe) ring buffer that seeds history — `info` is
+stream-only, so the high-frequency connect/disconnect hot path never touches
+storage. Connection rejections are console-only and never feed the stream/storage.
 
 ## React (build your own UI)
 

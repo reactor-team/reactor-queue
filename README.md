@@ -495,13 +495,20 @@ interface AdminLogEntry {
 ```
 
 On the wire it is two server→admin messages: a one-time `admin_log_history`
-(recent entries, sent right after auth) and a live `admin_log` per new event. The
+(recent history, sent right after auth) and a live `admin_log` per new event. The
 client layer accumulates both into `useReactorQueueAdmin().logs` (oldest → newest,
-capped client-side), so a dashboard just maps over `logs`. The server keeps a
-bounded ring buffer (last 200 events) in durable storage, so an admin connecting
-after the fact still sees recent history — and it survives hibernation. Logging
-only persists/streams when admin mode is enabled; the server **console** always
-gets every event regardless.
+capped client-side), so a dashboard just maps over `logs`.
+
+To stay cheap inside a Cloudflare Durable Object, the two tiers split by severity:
+**every** event is _streamed_ live to connected admins, but only `warn`/`error`
+are _persisted_ to the bounded ring buffer (last 200, durable, survives
+hibernation) that seeds `admin_log_history`. The high-frequency `info` events (a
+connect, an admission, a disconnect) never touch storage — keeping the hot path
+storage-free — while the rare, diagnostic failures are kept as history for an
+admin who connects after the fact. The server **console** always gets every event
+regardless of admin mode. Connection rejections (forbidden origin, duplicate tab)
+are console-only and never enter the stream or storage, so an unauthenticated
+flood can't drive admin work.
 
 Everything funnels through one server-side `log(level, event, message, …)` helper,
 so adding a logged event is a single call. Errors additionally fire the

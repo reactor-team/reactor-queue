@@ -167,16 +167,36 @@ export function createReactorQueueServer(
       }
     }
 
+    /** Write a structured line to the server console, nothing else. */
+    private writeConsole(
+      level: AdminLogLevel,
+      event: string,
+      message: string,
+      data?: Record<string, unknown>
+    ): void {
+      const line = `[reactor-queue] ${event}: ${message}`;
+      const ctx = data ?? "";
+      if (level === "error") console.error(line, ctx);
+      else if (level === "warn") console.warn(line, ctx);
+      else console.log(line, ctx);
+    }
+
     /**
      * Record one structured server event. Always writes to the server console;
-     * when admin mode is enabled (`adminPassword` set) it is also appended to the
-     * room's bounded log ring buffer and streamed live to connected admins. This
-     * is the single place server events become visible — call it wherever
-     * something notable happens.
+     * when admin mode is enabled (`adminPassword` set) it is also queued for the
+     * admin stream. This is the single place server events become visible — call
+     * it wherever something notable happens.
      *
      * Only console + in-memory work happens here; the persist/broadcast is
      * deferred to `flushBroadcasts()` so it lands inside the handler turn
-     * (hibernation-safe) and coalesces with the queue/admin broadcasts.
+     * (hibernation-safe) and coalesces with the queue/admin broadcasts. There,
+     * `info` events are streamed to live admins only, while `warn`/`error` are
+     * also written to the durable ring buffer — so the high-frequency hot path
+     * (connects/disconnects) never touches storage, but failures stay in history.
+     *
+     * Do **not** use this for connection rejections (forbidden origin, duplicate
+     * tab): those are unauthenticated and attacker-driven, so queuing them would
+     * let a flood drive admin-stream work. Log rejections with `writeConsole`.
      */
     private log(
       level: AdminLogLevel,
@@ -184,7 +204,11 @@ export function createReactorQueueServer(
       message: string,
       opts: { connId?: string; sessionId?: string; data?: Record<string, unknown> } = {}
     ): void {
-      const entry: AdminLogEntry = {
+      this.writeConsole(level, event, message, opts.data);
+
+      // Only pay the stream/storage cost when an operator can actually read it.
+      if (!this.config.adminPassword) return;
+      this.pendingLogs.push({
         id: this.genId(),
         at: Date.now(),
         level,
@@ -193,16 +217,7 @@ export function createReactorQueueServer(
         ...(opts.connId ? { connId: opts.connId } : {}),
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.data ? { data: opts.data } : {}),
-      };
-
-      const line = `[reactor-queue] ${event}: ${message}`;
-      const ctx = opts.data ?? "";
-      if (level === "error") console.error(line, ctx);
-      else if (level === "warn") console.warn(line, ctx);
-      else console.log(line, ctx);
-
-      // Only pay the storage/broadcast cost when an operator can actually read it.
-      if (this.config.adminPassword) this.pendingLogs.push(entry);
+      });
     }
 
     // ── storage helpers ────────────────────────────────────────────────────
@@ -392,8 +407,7 @@ export function createReactorQueueServer(
       this.adminDirty = true;
     }
 
-    private async broadcastAdminSnapshots(): Promise<void> {
-      const admins = await this.getActiveAdminConnIds();
+    private async broadcastAdminSnapshots(admins: string[]): Promise<void> {
       if (admins.length === 0) return;
       const snapshot = await this.buildSnapshot();
       for (const connId of admins) this.sendAdminTo(connId, snapshot);
@@ -430,9 +444,7 @@ export function createReactorQueueServer(
       return [...items.values()];
     }
 
-    private async broadcastLogs(entries: AdminLogEntry[]): Promise<void> {
-      const admins = await this.getActiveAdminConnIds();
-      if (admins.length === 0) return;
+    private broadcastLogs(admins: string[], entries: AdminLogEntry[]): void {
       for (const connId of admins) {
         for (const entry of entries) this.sendAdminTo(connId, { type: "admin_log", entry });
       }
@@ -518,11 +530,18 @@ export function createReactorQueueServer(
           } else {
             this.send(conn, { type: "rejected", reason: "forbidden_origin" });
           }
-          this.log("warn", "forbidden_origin", "Rejected a connection from a disallowed origin", {
-            connId: conn.id,
-            data: { origin: ctx.request.headers.get("origin") ?? null, admin: isAdmin },
-          });
-          await this.flushBroadcasts();
+          // Console-only: an unauthenticated origin flood must not be able to
+          // drive admin-stream/storage work — that would amplify the very abuse
+          // the allow-list exists to reject cheaply.
+          this.writeConsole(
+            "warn",
+            "forbidden_origin",
+            "Rejected a connection from a disallowed origin",
+            {
+              origin: ctx.request.headers.get("origin") ?? null,
+              admin: isAdmin,
+            }
+          );
           conn.close(1008, "forbidden_origin");
           return;
         }
@@ -547,13 +566,14 @@ export function createReactorQueueServer(
               // No app-level heartbeat needed; `onClose` cleans the mapping.
               if (this.room.getConnection(entry.connId)) {
                 this.send(conn, { type: "rejected", reason: "already_connected" });
-                this.log(
+                // Console-only (same reasoning as forbidden_origin): a rejection
+                // path must stay cheap and not feed the admin stream/storage.
+                this.writeConsole(
                   "warn",
                   "duplicate_rejected",
                   "Rejected a duplicate connection (same browser already connected in another tab)",
                   { connId: conn.id }
                 );
-                await this.flushBroadcasts();
                 conn.close(1008, "already_connected");
                 return;
               }
@@ -1063,23 +1083,36 @@ export function createReactorQueueServer(
           this.reportError("broadcast", err);
         }
       }
-      if (this.adminDirty) {
-        this.adminDirty = false;
-        try {
-          await this.broadcastAdminSnapshots();
-        } catch (err) {
-          this.reportError("adminBroadcast", err);
+      const haveLogs = this.pendingLogs.length > 0;
+      if (this.adminDirty || haveLogs) {
+        // Resolve the active admin set once: the snapshot push and the log stream
+        // both target it, so we don't scan `admin:` twice per flush.
+        const admins = await this.getActiveAdminConnIds();
+
+        if (this.adminDirty) {
+          this.adminDirty = false;
+          try {
+            await this.broadcastAdminSnapshots(admins);
+          } catch (err) {
+            this.reportError("adminBroadcast", err);
+          }
         }
-      }
-      if (this.pendingLogs.length > 0) {
-        const batch = this.pendingLogs;
-        this.pendingLogs = [];
-        try {
-          await this.persistLogs(batch);
-          await this.broadcastLogs(batch);
-        } catch (err) {
-          // Never route through reportError → log() (would re-enqueue and recurse).
-          console.error("[reactor-queue] logFlush", err);
+
+        if (haveLogs) {
+          const batch = this.pendingLogs;
+          this.pendingLogs = [];
+          try {
+            // Persist only warn/error — the rare, diagnostic history (kept even
+            // with no admin watching, so it's there when one connects). `info`
+            // is streamed to live admins but never written to storage, so the
+            // high-frequency connect/disconnect hot path stays storage-free.
+            const durable = batch.filter((e) => e.level !== "info");
+            if (durable.length > 0) await this.persistLogs(durable);
+            this.broadcastLogs(admins, batch);
+          } catch (err) {
+            // Never route through reportError → log() (would re-enqueue and recurse).
+            console.error("[reactor-queue] logFlush", err);
+          }
         }
       }
     }
