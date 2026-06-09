@@ -1,6 +1,6 @@
 ---
 name: deploy-partykit
-description: Deploy a @reactor-team/queue PartyKit waiting-room server to your own Cloudflare account (cloud-prem) so the room runs on your Cloudflare Workers + Durable Objects under a `<name>.<your-org>.workers.dev` host (or a domain you control). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship the PartyKit room beyond `partykit dev`. Covers the Cloudflare account + API token setup, the Workers Paid and workers.dev-subdomain requirements, the inline `partykit deploy --domain` command, passing the queue's secrets with `--var`, the expected (and harmless) one-time PartyKit GitHub login, pointing your web app at the deployed host, and the common footguns — free-plan Durable Objects failure, wrong account id, the deploy silently falling back to PartyKit's hosted platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only.
+description: Deploy a @reactor-team/queue PartyKit waiting-room server to your own Cloudflare account (cloud-prem) so the room runs on your Cloudflare Workers + Durable Objects under a `<name>.<your-org>.workers.dev` host (or a domain you control). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship the PartyKit room beyond `partykit dev`. Covers the Cloudflare account + API token setup, the Workers Paid and workers.dev-subdomain requirements, the inline `partykit deploy --domain` command, passing the queue's secrets with `--var`, the expected (and harmless) one-time PartyKit GitHub login, pointing your web app at the deployed host, and the common footguns — free-plan Durable Objects failure, wrong account id, the deploy silently falling back to PartyKit's hosted platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers automating the deploy as a GitHub Action on every push to main, including the non-interactive `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets.
 ---
 
 # Deploying a `@reactor-team/queue` room to Cloudflare (cloud-prem)
@@ -152,13 +152,105 @@ HTTP status and body.
 Re-run the **exact same command** (same `--name`) to push changes — it updates
 the existing Worker in place. No teardown.
 
+# Automate it: deploy on every push to main (GitHub Actions)
+
+Once the manual deploy works, wire it into CI so a merge to `main` ships the room
+with no manual step. The catch is auth: locally the PartyKit CLI does a one-time
+interactive **GitHub login**, and CI can't open a browser. The fix is a
+long-lived PartyKit token.
+
+## 1. Generate a PartyKit CI token
+
+On a dev machine (one time):
+
+```bash
+npx partykit token generate
+```
+
+It opens a browser to authorize you, then prints a `PARTYKIT_LOGIN` (your
+username) and a long-lived `PARTYKIT_TOKEN`. These two replace the interactive
+login in CI and are **mandatory even for a cloud-prem deploy** — without them the
+Action hangs waiting for a browser that never opens.
+
+## 2. Store secrets in a branch-scoped GitHub Environment
+
+Put the secrets in a **GitHub Environment** (e.g. `production`) rather than plain
+repo secrets, and restrict that environment to `main` (repo Settings →
+Environments → `production` → Deployment branches and tags → "Selected branches"
+→ a rule for `main`). Then the credentials are only available to runs on `main` —
+never to PR branches or forks. The environment needs:
+
+| Secret | What |
+|--------|------|
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | Your Cloudflare account (Workers Paid) + token. |
+| `PARTYKIT_TOKEN` / `PARTYKIT_LOGIN` | From `partykit token generate` (step 1). |
+| `PARTYKIT_SERVER_URL` | The deploy host, e.g. `<your-queue>.<your-org>.workers.dev`. Keeping it a secret lets the same workflow serve any project. |
+| `RQ_REACTOR_API_KEY` | The queue's Reactor API key (passed as `--var`). |
+| `RQ_ADMIN_PASSWORD` | Admin dashboard password, if you enabled it (passed as `--var`). |
+
+## 3. The workflow
+
+`.github/workflows/deploy-partykit.yml` (adjust the package manager / install step
+to your repo):
+
+```yaml
+name: Deploy PartyKit
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-partykit
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production        # branch-scoped to main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Deploy to Cloudflare
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
+          PARTYKIT_LOGIN: ${{ secrets.PARTYKIT_LOGIN }}
+          PARTYKIT_SERVER_URL: ${{ secrets.PARTYKIT_SERVER_URL }}
+          RQ_REACTOR_API_KEY: ${{ secrets.RQ_REACTOR_API_KEY }}
+          RQ_ADMIN_PASSWORD: ${{ secrets.RQ_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # --name is the host's first label; --domain is the whole host. Room
+          # shape stays baked into partykit/server.ts, so only secrets are --var.
+          name="${PARTYKIT_SERVER_URL%%.*}"
+          npx partykit deploy \
+            --name "$name" \
+            --domain "$PARTYKIT_SERVER_URL" \
+            --var RQ_REACTOR_API_KEY="$RQ_REACTOR_API_KEY" \
+            --var RQ_ADMIN_PASSWORD="$RQ_ADMIN_PASSWORD"
+```
+
+`CLOUDFLARE_*` + `--domain` keep it cloud-prem; `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN`
+satisfy the CLI's auth without a browser. A `concurrency` group means a newer
+push supersedes an in-flight deploy instead of racing it.
+
 # Footguns (read before you ship)
 
 ### 1. The GitHub login is required — and harmless
 The PartyKit CLI makes you log in with GitHub on the first `deploy`. This is
 **not** a sign you're deploying to the wrong place: with `--domain …workers.dev`
 + the Cloudflare credentials, the room still lands on your Cloudflare account.
-Log in and continue.
+Log in and continue. In CI there's no browser to log in with — generate a
+long-lived `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` instead (see *Automate it* above).
 
 ### 2. Credentials must be inline, not in `.env`
 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` must be inline env vars on the
