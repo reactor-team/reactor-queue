@@ -5,7 +5,7 @@ import {
   DEFAULT_ROOM,
   parseServerMessage,
   type ClientMessage,
-} from "@reactor-team/queue-protocol";
+} from "./protocol";
 import { INITIAL_STATE, type QueueState, type ReactorQueueClientOptions } from "./types";
 
 const CLIENT_ID_STORAGE_KEY = "reactor-queue:client-id";

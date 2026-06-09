@@ -22,7 +22,6 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
-    "@reactor-team/queue-server": "workspace:*",
     "@types/node": "^20.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

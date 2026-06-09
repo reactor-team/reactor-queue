@@ -1,4 +1,4 @@
-import { createReactorQueueServer } from "@reactor-team/queue-server";
+import { createReactorQueueServer } from "@reactor-team/queue/server";
 
 // The whole queue server — and the one place its behavior is configured.
 //

@@ -4,7 +4,7 @@ import {
   DEFAULT_ROOM,
   parseAdminServerMessage,
   type AdminClientMessage,
-} from "@reactor-team/queue-protocol";
+} from "./protocol";
 import {
   INITIAL_ADMIN_STATE,
   MAX_CLIENT_LOGS,

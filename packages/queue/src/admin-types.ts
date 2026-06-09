@@ -1,8 +1,4 @@
-import type {
-  AdminActionResultMessage,
-  AdminLogEntry,
-  AdminSnapshotMessage,
-} from "@reactor-team/queue-protocol";
+import type { AdminActionResultMessage, AdminLogEntry, AdminSnapshotMessage } from "./protocol";
 
 export type AdminPhase = "idle" | "connecting" | "ready" | "rejected" | "disconnected";
 

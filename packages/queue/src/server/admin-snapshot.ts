@@ -4,7 +4,7 @@ import type {
   AdminQueuedUserSnapshot,
   AdminSessionSnapshot,
   AdminSnapshotMessage,
-} from "@reactor-team/queue-protocol";
+} from "../protocol";
 import type { ResolvedConfig } from "./config";
 
 interface MemberData {

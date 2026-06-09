@@ -1,7 +1,7 @@
 /**
  * Shared wire protocol for `@reactor-team/queue`.
  *
- * Both the PartyKit server (`@reactor-team/queue-server`) and the browser
+ * Both the PartyKit server (`@reactor-team/queue/server`) and the browser
  * client (`@reactor-team/queue`) import these types so the messages they
  * exchange over the WebSocket stay in lockstep. Nothing here depends on
  * PartyKit, the Reactor SDK, React, or the DOM — it is plain data.
@@ -21,7 +21,7 @@ export const ADMIN_MODE_QUERY_KEY = "rqAdmin";
 
 /**
  * Default tunables. Every one of these is overridable from server config and/or
- * environment variables (see `@reactor-team/queue-server`).
+ * environment variables (see `@reactor-team/queue/server`).
  */
 export const DEFAULTS = {
   /** Max concurrent Reactor sessions (GPU ceiling). */

@@ -13,13 +13,22 @@ server owns `POST /sessions`; browsers attach with `connect({ sessionId })`
 instead of creating their own sessions. It is a thin utility on top of the
 public Reactor REST API; it does not replace or fork anything.
 
-## Packages
+## One package, subpath entry points
 
-| Package                                               | What it is                                                                        | You install it…          |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------ |
-| [`@reactor-team/queue`](./packages/client)            | Client: framework-agnostic `ReactorQueueClient` + React/zustand layer (`./react`) | in your web app          |
-| [`@reactor-team/queue-server`](./packages/server)     | The PartyKit `Server` factory                                                     | in your PartyKit project |
-| [`@reactor-team/queue-protocol`](./packages/protocol) | Shared wire types + defaults (transitive)                                         | automatically            |
+Everything ships in a single package — **[`@reactor-team/queue`](./packages/queue)** —
+with a subpath entry point for each surface. Install it once in your web app and
+once in your PartyKit project (often the same repo); import the half you need:
+
+| Import                                                          | What it is                                                      | Where it runs         |
+| --------------------------------------------------------------- | --------------------------------------------------------------- | --------------------- |
+| `@reactor-team/queue`                                           | Framework-agnostic `ReactorQueueClient`                         | your web app          |
+| `@reactor-team/queue/react`                                     | React/zustand layer (`ReactorQueueProvider`, `useReactorQueue`) | your web app          |
+| `@reactor-team/queue/server`                                    | PartyKit `Server` factory (`createReactorQueueServer`)          | your PartyKit project |
+| `@reactor-team/queue/admin` · `@reactor-team/queue/admin/react` | Admin client + React layer (operator dashboard)                 | your admin UI         |
+| `@reactor-team/queue/protocol`                                  | Shared wire types + defaults (rarely imported directly)         | both                  |
+
+One package means one version to install and bump — and the client and server can
+never end up on mismatched wire types.
 
 ---
 
@@ -35,7 +44,7 @@ server. Each option is typed and documented; nothing is duplicated elsewhere:
 
 ```ts
 // partykit/server.ts
-import { createReactorQueueServer } from "@reactor-team/queue-server";
+import { createReactorQueueServer } from "@reactor-team/queue/server";
 
 export default createReactorQueueServer({
   model: "helios", // model the queue opens sessions for
@@ -254,7 +263,7 @@ Reactor who needs to meter live access to a model:
 ```
    Browser (your app)                    PartyKit room (you deploy)            Reactor Coordinator
  ┌─────────────────────┐  WebSocket  ┌────────────────────────────┐  REST   ┌──────────────────────┐
- │ @reactor-team/queue │◀───────────▶│ @reactor-team/queue-server │────────▶│ POST /tokens         │
+ │ @reactor-team/queue │◀───────────▶│ @reactor-team/queue/server │────────▶│ POST /tokens         │
  │  • partysocket      │   queue +   │  • FIFO queue + session cap │         │ POST /sessions       │
  │  • getJwt() resolver│   tokens    │  • mints 60s Reactor JWTs  │         │ GET  /sessions/{id}  │
  │  • sessionId on claim│             │  • creates sessions on claim│         │ DELETE /sessions/{id}│
@@ -479,7 +488,7 @@ See [`examples/basic/app/admin`](./examples/basic/app/admin) for a full dashboar
 Beyond the snapshot, the server streams a **structured activity log** to every
 authenticated admin. Each notable event — a user joining, an admission, a session
 created or closed, a timeout, an admin action, and every non-fatal **error** — is
-emitted as an [`AdminLogEntry`](./packages/protocol/src/index.ts):
+emitted as an [`AdminLogEntry`](./packages/queue/src/protocol.ts):
 
 ```ts
 interface AdminLogEntry {
@@ -518,7 +527,7 @@ so adding a logged event is a single call. Errors additionally fire the
 
 The most useful thing the log surfaces is **why the Reactor API rejected a
 request**. A failed `POST /sessions` (or token mint, or stop) throws a
-[`CoordinatorError`](./packages/server/src/coordinator.ts) carrying the endpoint,
+[`CoordinatorError`](./packages/queue/src/server/coordinator.ts) carrying the endpoint,
 HTTP status, and response body, which the log records verbatim under
 `event: "session_create_failed"`:
 
@@ -612,9 +621,11 @@ with the queued user, the platform must allow more than one connection per sessi
 
 ```
 packages/
-  protocol/   @reactor-team/queue-protocol   shared wire types + defaults
-  server/     @reactor-team/queue-server      PartyKit queue engine
-  client/     @reactor-team/queue             JS client + React/zustand layer
+  queue/      @reactor-team/queue — one package, subpath entry points:
+                src/                client + React layer  → "." and "/react"
+                src/admin-*         admin client + React  → "/admin", "/admin/react"
+                src/server/         PartyKit queue engine → "/server"
+                src/protocol.ts     shared wire types     → "/protocol"
 examples/
   basic/      runnable single-page demo (web app + its own PartyKit room)
 skill/        SKILL.md — guide for building queued demos with this library
@@ -628,18 +639,17 @@ pnpm dev         # watch-build all packages
 pnpm example     # run the basic example (web + PartyKit) — needs examples/basic/.env
 ```
 
-This is a pnpm workspace; the packages reference each other via `workspace:*`.
-The `pnpm example` target runs the in-repo demo, which already consumes the
-packages this way — so the fastest way to try a change is to run `pnpm dev` (watch
-build) in one terminal and `pnpm example` in another.
+This is a pnpm workspace; the example consumes the package via `workspace:*`. The
+`pnpm example` target runs the in-repo demo, so the fastest way to try a change is
+to run `pnpm dev` (watch build) in one terminal and `pnpm example` in another.
 
 ## Using the library locally (without npm)
 
-These packages aren't on npm yet (see [Milestones](#milestones)). Until they are
-— or whenever you want to test an unreleased change against your own app — point
-your project at a local checkout instead of the registry. Clone this repo next to
-your app and **build the packages first** (their `package.json` `main`/`types`
-point at `dist/`, so an unbuilt checkout resolves to nothing):
+This package isn't on npm yet (see [Milestones](#milestones)). Until it is — or
+whenever you want to test an unreleased change against your own app — point your
+project at a local checkout instead of the registry. Clone this repo next to your
+app and **build the package first** (its `package.json` `main`/`types` point at
+`dist/`, so an unbuilt checkout resolves to nothing):
 
 ```bash
 git clone https://github.com/reactor-team/reactor-queue
@@ -652,24 +662,18 @@ Then wire your app to that checkout with one of the approaches below.
 
 ### Recommended: a pnpm `link:` override
 
-In **your app's** `package.json`, override the three packages to the local
-directories. This is resolved for transitive deps too, so the internal
-`workspace:*` references (`@reactor-team/queue` → `queue-protocol`) point at your
-checkout as well:
+In **your app's** `package.json`, override the single package to your local
+directory. pnpm resolves it for the PartyKit project too, so both halves point at
+your checkout:
 
 ```jsonc
 {
   "dependencies": {
     "@reactor-team/queue": "*",
   },
-  "devDependencies": {
-    "@reactor-team/queue-server": "*",
-  },
   "pnpm": {
     "overrides": {
-      "@reactor-team/queue": "link:../reactor-queue/packages/client",
-      "@reactor-team/queue-server": "link:../reactor-queue/packages/server",
-      "@reactor-team/queue-protocol": "link:../reactor-queue/packages/protocol",
+      "@reactor-team/queue": "link:../reactor-queue/packages/queue",
     },
   },
 }
@@ -679,16 +683,16 @@ checkout as well:
 pnpm install   # in your app — now imports resolve to the local checkout
 ```
 
-Install `@reactor-team/queue` where your web app lives and
-`@reactor-team/queue-server` in your PartyKit project (often the same repo).
-Adjust the relative paths (`../reactor-queue/...`) to wherever you cloned it.
+The one `@reactor-team/queue` dependency covers both halves: the web app imports
+`@reactor-team/queue/react`, the PartyKit project imports `@reactor-team/queue/server`.
+Adjust the relative path (`../reactor-queue/...`) to wherever you cloned it.
 
 ### Live edits while you develop
 
 Run the watcher in the queue checkout so edits rebuild `dist/` automatically:
 
 ```bash
-pnpm dev   # in the reactor-queue checkout: watch-build all three packages
+pnpm dev   # in the reactor-queue checkout: watch-build the package
 ```
 
 With the `link:` override above, your app picks up each rebuild on the next
@@ -703,16 +707,13 @@ checkout and consume from your app:
 ```bash
 # in the reactor-queue checkout (after pnpm build)
 pnpm --filter @reactor-team/queue link --global
-pnpm --filter @reactor-team/queue-server link --global
 
 # in your app
 pnpm link --global @reactor-team/queue
-pnpm link --global @reactor-team/queue-server
 ```
 
-The `link:` override is generally less surprising because it also pins the
-transitive `@reactor-team/queue-protocol` to your checkout; with global links you
-may need to link `@reactor-team/queue-protocol` too.
+The `link:` override is generally less surprising, but a single global link works
+fine now that the client and server ship in one package.
 
 ### Verifying the real published artifact
 
@@ -724,7 +725,7 @@ packaging — build a tarball and install that:
 pnpm --filter @reactor-team/queue pack   # → reactor-team-queue-0.1.0.tgz
 
 # in your app
-pnpm add ../reactor-queue/packages/client/reactor-team-queue-0.1.0.tgz
+pnpm add ../reactor-queue/packages/queue/reactor-team-queue-0.1.0.tgz
 ```
 
 `pnpm pack` runs the same `prepack`/`postpack` as publishing, so the tarball
@@ -780,9 +781,8 @@ is what's up next. The rest is roughly ordered intent, not a commitment.
 - [x] Server-owned sessions (queue creates/stops the Reactor session)
 - [x] Hibernation-ready storage model for production-scale rooms
 - [x] Admin dashboard (watch the room, kick members, close sessions)
-- [ ] **Distributing on npmjs** — publish `@reactor-team/queue`,
-      `@reactor-team/queue-server`, and `@reactor-team/queue-protocol` to the
-      public registry so consumers install them directly instead of from source.
+- [ ] **Distributing on npmjs** — publish `@reactor-team/queue` to the public
+      registry so consumers install it directly instead of from source.
 
 ## License
 

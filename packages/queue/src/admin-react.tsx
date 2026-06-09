@@ -126,9 +126,5 @@ export type {
   AdminPasswordSource,
   ReactorQueueAdminClientOptions,
 } from "./admin-types";
-export type {
-  AdminLogEntry,
-  AdminLogLevel,
-  AdminSnapshotMessage,
-} from "@reactor-team/queue-protocol";
+export type { AdminLogEntry, AdminLogLevel, AdminSnapshotMessage } from "./protocol";
 export { ReactorQueueAdminClient } from "./admin-client";

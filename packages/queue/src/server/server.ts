@@ -8,7 +8,7 @@ import {
   type AdminLogLevel,
   type AdminServerMessage,
   type ServerMessage,
-} from "@reactor-team/queue-protocol";
+} from "../protocol";
 import { buildAdminSnapshot } from "./admin-snapshot";
 import { resolveConfig, type ReactorQueueServerConfig, type ResolvedConfig } from "./config";
 import type { ReleaseSessionContext } from "./config";
@@ -79,7 +79,7 @@ interface ClientEntry {
  *
  * ```ts
  * // partykit/server.ts
- * import { createReactorQueueServer } from "@reactor-team/queue-server";
+ * import { createReactorQueueServer } from "@reactor-team/queue/server";
  * export default createReactorQueueServer({ model: "helios" });
  * ```
  */

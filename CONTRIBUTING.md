@@ -4,9 +4,9 @@ Thanks for your interest in contributing to Reactor Queue.
 
 This repository contains:
 
-- `packages/client/` — the published `@reactor-team/queue` client package
-- `packages/server/` — the published `@reactor-team/queue-server` PartyKit server
-- `packages/protocol/` — the published `@reactor-team/queue-protocol` shared wire types
+- `packages/queue/` — the published `@reactor-team/queue` package: the browser
+  client (`.`, `/react`, `/admin`, `/admin/react`) and the PartyKit server
+  (`/server`), sharing one wire protocol (`/protocol`)
 
 All packages are released under the [Apache License, Version 2.0](./LICENSE).
 

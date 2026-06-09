@@ -1,7 +1,7 @@
 {
   "name": "@reactor-team/queue",
   "version": "0.1.0",
-  "description": "Client for the Reactor demo queue: a framework-agnostic WebSocket client plus a React/zustand layer that exposes a getJwt resolver you drop straight into the Reactor SDK.",
+  "description": "Drop-in waiting room for Reactor demos: one package for the browser client (framework-agnostic + React/zustand) and the PartyKit server (`@reactor-team/queue/server`), sharing one wire protocol so they can't drift.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -27,6 +27,16 @@
       "types": "./dist/admin-react.d.ts",
       "import": "./dist/admin-react.js",
       "require": "./dist/admin-react.cjs"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "require": "./dist/server/index.cjs"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js",
+      "require": "./dist/protocol.cjs"
     }
   },
   "files": [
@@ -43,14 +53,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@reactor-team/queue-protocol": "workspace:*",
     "partysocket": "^1.1.19"
   },
   "peerDependencies": {
+    "partykit": "*",
     "react": ">=18",
     "zustand": ">=4"
   },
   "peerDependenciesMeta": {
+    "partykit": {
+      "optional": true
+    },
     "react": {
       "optional": true
     },
@@ -60,6 +73,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
+    "partykit": "^0.0.115",
     "react": "^19.0.0",
     "tsup": "^8.3.5",
     "typescript": "^6.0.3",

@@ -58,9 +58,7 @@ check_pkg_license() {
   fi
 }
 
-check_pkg_license packages/client/package.json
-check_pkg_license packages/server/package.json
-check_pkg_license packages/protocol/package.json
+check_pkg_license packages/queue/package.json
 
 # ---------------------------------------------------------------------------
 # Summary

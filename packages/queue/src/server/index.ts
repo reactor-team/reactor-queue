@@ -11,4 +11,4 @@ export type {
 } from "./config";
 
 // Re-export the wire protocol so server-side code has a single import surface.
-export * from "@reactor-team/queue-protocol";
+export * from "../protocol";
