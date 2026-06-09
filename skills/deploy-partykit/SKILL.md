@@ -9,7 +9,7 @@ You've built a queue demo (see the `building-reactor-queue-demos` skill): a
 `partykit.json` and a `partykit/server.ts` that does
 `export default createReactorQueueServer({ … })`, plus a web app that connects to
 it. So far it only runs under `partykit dev`. This skill ships the PartyKit room
-to **production on your own Cloudflare account** — *cloud-prem*: the room runs on
+to **production on your own Cloudflare account** — _cloud-prem_: the room runs on
 **your** Cloudflare Workers + Durable Objects, not on PartyKit's hosted platform.
 
 The deployed room is a backend WebSocket endpoint your web app talks to; end
@@ -113,8 +113,8 @@ We're provisioning the <your-queue>.<your-org>.workers.dev domain. This can take
 `<name>.<your-org>.workers.dev`. Pick one per demo and keep `--name` and the
 `--domain` subdomain identical:
 
-- `--name meeting`  → `meeting.<your-org>.workers.dev`
-- `--name my-demo`  → `my-demo.<your-org>.workers.dev`
+- `--name meeting` → `meeting.<your-org>.workers.dev`
+- `--name my-demo` → `my-demo.<your-org>.workers.dev`
 
 A convenient pattern is to bake the name + domain into a script so the command
 you run day-to-day stays short:
@@ -199,13 +199,13 @@ Environments → `production` → Deployment branches and tags → "Selected bra
 → a rule for `main`). Then the credentials are only available to runs on `main` —
 never to PR branches or forks. The environment needs:
 
-| Secret | What |
-|--------|------|
-| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | Your Cloudflare account (Workers Paid) + token. |
-| `PARTYKIT_TOKEN` / `PARTYKIT_LOGIN` | From `partykit token generate` (step 1). |
-| `PARTYKIT_SERVER_URL` | The deploy host, e.g. `<your-queue>.<your-org>.workers.dev`. Keeping it a secret lets the same workflow serve any project. |
-| `RQ_REACTOR_API_KEY` | The queue's Reactor API key (passed as `--var`). |
-| `RQ_ADMIN_PASSWORD` | Admin dashboard password, if you enabled it (passed as `--var`). |
+| Secret                                           | What                                                                                                                       |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | Your Cloudflare account (Workers Paid) + token.                                                                            |
+| `PARTYKIT_TOKEN` / `PARTYKIT_LOGIN`              | From `partykit token generate` (step 1).                                                                                   |
+| `PARTYKIT_SERVER_URL`                            | The deploy host, e.g. `<your-queue>.<your-org>.workers.dev`. Keeping it a secret lets the same workflow serve any project. |
+| `RQ_REACTOR_API_KEY`                             | The queue's Reactor API key (passed as `--var`).                                                                           |
+| `RQ_ADMIN_PASSWORD`                              | Admin dashboard password, if you enabled it (passed as `--var`).                                                           |
 
 ## 3. The workflow
 
@@ -230,7 +230,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production        # branch-scoped to main
+    environment: production # branch-scoped to main
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -265,24 +265,28 @@ push supersedes an in-flight deploy instead of racing it.
 # Footguns (read before you ship)
 
 ### 1. The GitHub login is required — and harmless
+
 The PartyKit CLI makes you log in with GitHub on the first `deploy`. This is
 **not** a sign you're deploying to the wrong place: with `--domain …workers.dev`
-+ the Cloudflare credentials, the room still lands on your Cloudflare account.
+and the Cloudflare credentials, the room still lands on your Cloudflare account.
 Log in and continue. In CI there's no browser to log in with — generate a
-long-lived `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` instead (see *Automate it* above).
+long-lived `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` instead (see _Automate it_ above).
 
 ### 2. Credentials must be inline, not in `.env`
+
 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` must be inline env vars on the
 deploy command, and runtime secrets must go through `--var`. PartyKit does **not**
 reliably read these from a `.env` for a deploy. A `.env` is fine for
 `partykit dev`; it is not the mechanism for `deploy`.
 
 ### 3. Free plan → Durable Objects failure
+
 PartyKit rooms are classic Durable Objects, which need **Workers Paid**. A
 free-plan account fails the deploy with a Durable Objects plan error. Enable
 Workers Paid on the target account first.
 
-### 4. Use the *right* account
+### 4. Use the _right_ account
+
 The `--domain` host, the `CLOUDFLARE_ACCOUNT_ID`, and the API token's scope must
 all point at the **same** account — the one with Workers Paid and the
 `workers.dev` subdomain. A token that verifies fine but is scoped to a different
@@ -290,11 +294,13 @@ account (e.g. a personal free-plan one) is the classic cause of a confusing
 plan error. Double-check the account id and that the token manages that account.
 
 ### 5. No `--domain` → hosted platform
+
 Omit `--domain` (or the Cloudflare creds) and PartyKit deploys to its own hosted
 platform (`*.partykit.dev`) instead of your Cloudflare account. If you wanted
 cloud-prem, always pass both.
 
 ### 6. Subdomains as separate zones are Enterprise-only
+
 You **cannot** add `queue.example.com` to Cloudflare as its own zone on a normal
 plan — Cloudflare's "add a domain" only accepts an apex/registrable domain, and
 splitting a subdomain into its own zone is an Enterprise feature. For a normal
