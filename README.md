@@ -662,9 +662,16 @@ skills/       agent skills (one folder each, with a SKILL.md):
 pnpm install
 pnpm build       # build all packages (tsup)
 pnpm typecheck   # tsc --noEmit across packages
+pnpm test        # run the unit test suite (vitest)
 pnpm dev         # watch-build all packages
 pnpm example     # run the basic example (web + PartyKit) — needs examples/basic/.env
 ```
+
+Unit tests live in [`packages/queue/test`](./packages/queue/test) and run on every
+pull request and push to `main` (the `Test` workflow). They are hermetic — no
+network, PartyKit, or Reactor calls — driving the wire protocol, the client and
+admin state machines, the PartyKit server engine (against an in-memory room),
+and the Coordinator REST client (against a stubbed `fetch`).
 
 This is a pnpm workspace; the example consumes the package via `workspace:*`. The
 `pnpm example` target runs the in-repo demo, so the fastest way to try a change is
