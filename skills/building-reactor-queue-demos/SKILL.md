@@ -549,3 +549,5 @@ reconciles state.
 - `README.md` — full library reference and architecture.
 - `examples/basic` — runnable demo (`app/page.tsx`) + admin dashboard
   (`app/admin/page.tsx`) + its PartyKit room (`partykit/server.ts`).
+- `deploy-partykit` skill — when the demo's ready, deploy its PartyKit room to
+  Cloudflare (cloud-prem).

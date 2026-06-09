@@ -653,7 +653,9 @@ packages/
                 src/protocol.ts     shared wire types     → "/protocol"
 examples/
   basic/      runnable single-page demo (web app + its own PartyKit room)
-skill/        SKILL.md — guide for building queued demos with this library
+skills/       agent skills (one folder each, with a SKILL.md):
+  building-reactor-queue-demos/   build a queued demo with this library
+  deploy-partykit/                deploy the PartyKit room to Cloudflare
 ```
 
 ```bash
