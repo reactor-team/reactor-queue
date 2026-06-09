@@ -1,6 +1,6 @@
 ---
 name: deploy-partykit
-description: Deploy a @reactor-team/queue PartyKit waiting-room server to your own Cloudflare account (cloud-prem) so the room runs on your Cloudflare Workers + Durable Objects under a `<name>.<your-org>.workers.dev` host (or a domain you control). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship the PartyKit room beyond `partykit dev`. Covers the Cloudflare account + API token setup, the Workers Paid and workers.dev-subdomain requirements, the inline `partykit deploy --domain` command, passing the queue's secrets with `--var`, the expected (and harmless) one-time PartyKit GitHub login, pointing your web app at the deployed host, and the common footguns — free-plan Durable Objects failure, wrong account id, the deploy silently falling back to PartyKit's hosted platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers automating the deploy as a GitHub Action on every push to main, including the non-interactive `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets.
+description: Deploy a @reactor-team/queue PartyKit waiting-room server to your own Cloudflare account (cloud-prem) so the room runs on your Cloudflare Workers + Durable Objects under a `<name>.<your-org>.workers.dev` host (or a domain you control). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship the PartyKit room beyond `partykit dev`. Covers the Cloudflare account + API token setup, the Workers Paid and workers.dev-subdomain requirements, the inline `partykit deploy --domain` command, passing the queue's secrets with `--var`, the expected (and harmless) one-time PartyKit GitHub login, pointing your web app at the deployed host, and the common footguns — free-plan Durable Objects failure, wrong account id, the deploy silently falling back to PartyKit's hosted platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers *optionally* automating the deploy as a GitHub Action on every push to main — this is opt-in, so suggest it and only add it when the user explicitly asks — including how to generate the `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` PartyKit variables for non-interactive CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets.
 ---
 
 # Deploying a `@reactor-team/queue` room to Cloudflare (cloud-prem)
@@ -154,23 +154,42 @@ the existing Worker in place. No teardown.
 
 # Automate it: deploy on every push to main (GitHub Actions)
 
-Once the manual deploy works, wire it into CI so a merge to `main` ships the room
-with no manual step. The catch is auth: locally the PartyKit CLI does a one-time
-interactive **GitHub login**, and CI can't open a browser. The fix is a
+> **Optional — opt-in only.** Do **not** set this up by default. Most demos are
+> fine shipping with the manual deploy above. **Suggest** automation to the user
+> ("want me to add a GitHub Action that redeploys on every push to `main`?") and
+> only add the workflow if they **explicitly say yes**. It introduces a CI token,
+> extra secrets, and a deploy-on-merge side effect the user should choose
+> knowingly.
+
+Once the manual deploy works, you can wire it into CI so a merge to `main` ships
+the room with no manual step. The catch is auth: locally the PartyKit CLI does a
+one-time interactive **GitHub login**, and CI can't open a browser. The fix is a
 long-lived PartyKit token.
 
-## 1. Generate a PartyKit CI token
+## 1. Generate the PartyKit variables (`PARTYKIT_TOKEN` + `PARTYKIT_LOGIN`)
 
-On a dev machine (one time):
+These two are the "PartyKit variables" the workflow needs. Generate them **on a
+dev machine** (one time) — they can't be produced inside CI, which is the whole
+point:
 
 ```bash
 npx partykit token generate
 ```
 
-It opens a browser to authorize you, then prints a `PARTYKIT_LOGIN` (your
-username) and a long-lived `PARTYKIT_TOKEN`. These two replace the interactive
-login in CI and are **mandatory even for a cloud-prem deploy** — without them the
-Action hangs waiting for a browser that never opens.
+This opens a browser so you can authorize with the **same GitHub account** you
+deploy with, then prints exactly two lines, e.g.:
+
+```text
+PARTYKIT_LOGIN=your-github-username
+PARTYKIT_TOKEN=eyJhbGciOi…long-lived-token
+```
+
+Copy both values and store them as secrets (step 2). `PARTYKIT_LOGIN` is your
+GitHub username; `PARTYKIT_TOKEN` is a long-lived session token — treat it like a
+password. Together they replace the interactive browser login in CI and are
+**mandatory even for a cloud-prem deploy** — without them the Action hangs
+waiting for a browser that never opens. Re-run the command anytime to mint a
+fresh token (e.g. to rotate it).
 
 ## 2. Store secrets in a branch-scoped GitHub Environment
 
