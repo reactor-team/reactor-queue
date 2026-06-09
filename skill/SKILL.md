@@ -46,7 +46,7 @@ Stop there.
 
 ```
 Browser (your app)                   PartyKit room (you deploy)            Reactor Coordinator
-@reactor-team/queue                  @reactor-team/queue-server            api.reactor.inc
+@reactor-team/queue                  @reactor-team/queue/server            api.reactor.inc
   • partysocket (ws)  ───────────▶     • FIFO queue + capacity gate   ──────▶  POST /sessions   (on claim)
   • getJwt() resolver  ◀── token ──    • mints JWTs                           POST /tokens
   • sessionId on session_ready         • per-member timers (alarm)            GET/DELETE /sessions/{id}
@@ -79,11 +79,20 @@ The PartyKit room is the **single source of truth**:
 
 ## Packages
 
-| Package                        | Where it runs         | Import                                                                                                                            |
-| ------------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `@reactor-team/queue-server`   | your PartyKit project | `createReactorQueueServer`                                                                                                        |
-| `@reactor-team/queue`          | your web app          | `ReactorQueueClient` (core), `@reactor-team/queue/react` (Provider + hooks), `@reactor-team/queue/admin` + `/admin/react` (admin) |
-| `@reactor-team/queue-protocol` | transitive            | wire message types + defaults                                                                                                     |
+**One package, `@reactor-team/queue`, with subpath entry points** — install it in
+both the web app and the PartyKit project (often the same repo) and import the half
+you need. There is no separate `-server` or `-protocol` package.
+
+| Import                                        | Where it runs         | What                                               |
+| --------------------------------------------- | --------------------- | -------------------------------------------------- |
+| `@reactor-team/queue`                         | your web app          | `ReactorQueueClient` (framework-agnostic core)     |
+| `@reactor-team/queue/react`                   | your web app          | `ReactorQueueProvider` + hooks (`useReactorQueue`) |
+| `@reactor-team/queue/server`                  | your PartyKit project | `createReactorQueueServer`                         |
+| `@reactor-team/queue/admin` · `…/admin/react` | your admin UI         | admin client + React layer                         |
+| `@reactor-team/queue/protocol`                | both (rarely direct)  | wire message types + defaults                      |
+
+`react`/`zustand` and `partykit` are **optional peer deps** — only the surfaces you
+import pull them in.
 
 ## What the queue automates (the Reactor pieces)
 
@@ -109,7 +118,7 @@ Configure the queue in code — `createReactorQueueServer({...})` is the one pla
 
 ```ts
 // partykit/server.ts
-import { createReactorQueueServer } from "@reactor-team/queue-server";
+import { createReactorQueueServer } from "@reactor-team/queue/server";
 
 export default createReactorQueueServer({
   model: "helios",
@@ -498,9 +507,12 @@ reconciles state.
 
 # Working on the queue packages themselves
 
-- `packages/protocol` holds the wire types + defaults — change here first when
-  adding a message; client and server both import it so they can't drift.
-- Server is one PartyKit `Server` class. Storage keys: `q:<seq>` + `qpos:<connId>`
+- `packages/queue/src/protocol.ts` holds the wire types + defaults — change here
+  first when adding a message; client and server both import it so they can't drift.
+- One package, `packages/queue/`, with subpath builds (tsup entries for `index`,
+  `react`, `admin-client`, `admin-react`, `server/index`, `protocol`); the exports
+  map in `package.json` wires each to its `dist/…` output.
+- Server is one PartyKit `Server` class (`src/server/`). Storage keys: `q:<seq>` + `qpos:<connId>`
   - `qseq`/`qcount` (the ordered queue), `member:<connId>`, `slot:<slotId>`,
     `cid:`/`conn:` (client mapping), `admin:<connId>`. Timers are alarm-driven.
 - All session-end paths funnel through `runRelease`; all session-acquire through

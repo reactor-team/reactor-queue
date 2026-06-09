@@ -25,7 +25,7 @@ importers:
         version: 2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       '@reactor-team/queue':
         specifier: workspace:*
-        version: link:../../packages/client
+        version: link:../../packages/queue
       hls.js:
         specifier: ^1.6.0
         version: 1.6.16
@@ -42,9 +42,6 @@ importers:
         specifier: ^5.0.6
         version: 5.0.14(@types/react@19.2.15)(react@19.2.6)
     devDependencies:
-      '@reactor-team/queue-server':
-        specifier: workspace:*
-        version: link:../../packages/server
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.41
@@ -64,11 +61,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  packages/client:
+  packages/queue:
     dependencies:
-      '@reactor-team/queue-protocol':
-        specifier: workspace:*
-        version: link:../protocol
       partysocket:
         specifier: ^1.1.19
         version: 1.1.19(react@19.2.6)
@@ -76,6 +70,9 @@ importers:
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.15
+      partykit:
+        specifier: ^0.0.115
+        version: 0.0.115
       react:
         specifier: ^19.0.0
         version: 19.2.6
@@ -88,31 +85,6 @@ importers:
       zustand:
         specifier: ^5.0.2
         version: 5.0.14(@types/react@19.2.15)(react@19.2.6)
-
-  packages/protocol:
-    devDependencies:
-      tsup:
-        specifier: ^8.3.5
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@6.0.3)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  packages/server:
-    dependencies:
-      '@reactor-team/queue-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-    devDependencies:
-      partykit:
-        specifier: ^0.0.115
-        version: 0.0.115
-      tsup:
-        specifier: ^8.3.5
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@6.0.3)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
 
 packages:
 

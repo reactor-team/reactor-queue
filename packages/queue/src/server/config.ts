@@ -1,4 +1,4 @@
-import { DEFAULTS, DEFAULT_ROOM } from "@reactor-team/queue-protocol";
+import { DEFAULTS, DEFAULT_ROOM } from "../protocol";
 
 /** Passed to a custom {@link ReactorQueueServerConfig.acquireSession}. */
 export interface AcquireSessionContext {

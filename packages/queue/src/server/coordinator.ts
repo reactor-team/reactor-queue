@@ -1,4 +1,4 @@
-import { TERMINAL_SESSION_STATES } from "@reactor-team/queue-protocol";
+import { TERMINAL_SESSION_STATES } from "../protocol";
 
 /**
  * Raised when the Coordinator answers a request with a non-OK status. Carries

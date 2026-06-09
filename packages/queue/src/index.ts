@@ -7,4 +7,4 @@ export {
 } from "./types";
 
 // Re-export the wire protocol for convenience (message types, defaults).
-export * from "@reactor-team/queue-protocol";
+export * from "./protocol";
