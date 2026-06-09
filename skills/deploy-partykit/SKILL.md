@@ -309,10 +309,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: production # branch-scoped to main
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
       - run: npm ci
       - name: Deploy to Cloudflare
         env:
