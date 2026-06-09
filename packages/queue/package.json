@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "description": "Drop-in waiting room for Reactor demos: one package for the browser client (framework-agnostic + React/zustand) and the PartyKit server (`@reactor-team/queue/server`), sharing one wire protocol so they can't drift.",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/reactor-team/reactor-queue#readme",
+  "bugs": "https://github.com/reactor-team/reactor-queue/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reactor-team/reactor-queue.git",
+    "directory": "packages/queue"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

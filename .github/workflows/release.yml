@@ -1,0 +1,41 @@
+# Automated npm distribution for @reactor-team/queue.
+#
+# How it works: the package version in packages/queue/package.json is the
+# trigger. On every push to main, the job below compares that version to the
+# release tags already in the repo. If the version is new it builds, publishes
+# to npm via OIDC trusted publishing (no NPM_TOKEN — see .github/RELEASING.md),
+# and cuts a `queue/v<version>` GitHub release. If the version already has a tag
+# the job is a no-op, so a normal PR with no version bump merges and releases
+# nothing; a later PR that bumps the version releases the package.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create release tags
+  id-token: write # OIDC trusted publishing
+
+jobs:
+  queue:
+    name: "@reactor-team/queue"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/release-package
+        with:
+          package-dir: packages/queue
+          tag-namespace: queue
