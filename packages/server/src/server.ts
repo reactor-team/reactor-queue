@@ -328,6 +328,14 @@ export function createReactorQueueServer(
       return undefined;
     }
 
+    /** The slot currently listing `connId` as a member, or undefined. */
+    private async findSlotByMember(connId: string): Promise<SlotRecord | undefined> {
+      for (const [, slot] of await this.getAllSlots()) {
+        if (slot.members.includes(connId)) return slot;
+      }
+      return undefined;
+    }
+
     private genId(): string {
       return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     }
@@ -452,12 +460,33 @@ export function createReactorQueueServer(
 
     private async adminKickMember(connId: string): Promise<{ ok: boolean; message?: string }> {
       const member = await this.getMember(connId);
-      if (!member) return { ok: false, message: "member_not_found" };
-      await this.releaseMember(connId, member, "server", { notify: true });
+      if (member) {
+        await this.releaseMember(connId, member, "server", { notify: true });
+        await this.tryAdmitNext();
+        this.log("warn", "admin_kick_member", "Admin evicted an admitted member", {
+          connId,
+          sessionId: member.sessionId ?? undefined,
+        });
+        this.scheduleAdminBroadcast();
+        return { ok: true };
+      }
+
+      // No member record, but the connId may be a *stale* entry left in a slot by
+      // a release/poll race. Scrub it (dropping the slot if it empties) so an
+      // operator can always clear an orphan the normal eviction can't reach.
+      const slot = await this.findSlotByMember(connId);
+      if (!slot) return { ok: false, message: "member_not_found" };
+
+      const live = slot.members.filter((id) => id !== connId);
+      if (live.length === 0) {
+        await this.dropSlot(slot.slotId, "server", { notify: false });
+      } else {
+        await this.setSlot({ ...slot, members: live });
+      }
       await this.tryAdmitNext();
-      this.log("warn", "admin_kick_member", "Admin evicted an admitted member", {
+      this.log("warn", "admin_kick_member", "Admin cleared a stale member from a slot", {
         connId,
-        sessionId: member.sessionId ?? undefined,
+        sessionId: slot.sessionId ?? undefined,
       });
       this.scheduleAdminBroadcast();
       return { ok: true };
@@ -486,19 +515,15 @@ export function createReactorQueueServer(
       const slot = await this.findSlotBySessionId(sessionId);
       if (!slot) return { ok: false, message: "session_not_found" };
 
-      const members = [...slot.members];
-      if (members.length === 0) {
-        // Orphan slot (session but no members): release + drop the record.
-        await this.runRelease({ sessionId, userId: "", reason: "server", lastMember: true });
-        await this.deleteSlot(slot.slotId);
-        this.config.hooks.onSessionClosed?.(sessionId, "server");
-      } else {
-        // Releasing members one by one ends the session on the last one.
-        for (const connId of members) {
-          const member = await this.getMember(connId);
-          if (member) await this.releaseMember(connId, member, "server", { notify: true });
-        }
+      // Release members that still have records so a custom `releaseSession` sees
+      // each departing user; the last one tears the slot down normally.
+      for (const connId of [...slot.members]) {
+        const member = await this.getMember(connId);
+        if (member) await this.releaseMember(connId, member, "server", { notify: true });
       }
+      // If the slot survived — its listed members had no records (an orphan) —
+      // force it closed so "Close session" always actually closes the session.
+      await this.dropSlot(slot.slotId, "server", { notify: true });
 
       await this.tryAdmitNext();
       this.log("warn", "admin_close_session", "Admin force-closed a session", { sessionId });
@@ -783,6 +808,10 @@ export function createReactorQueueServer(
           }
         }
 
+        // Prune orphaned slots (stale members, no member records) before polling,
+        // so the platform isn't queried for slots that are about to be freed.
+        if (await this.reconcileSlots()) freedAny = true;
+
         for (const [, slot] of await this.getAllSlots()) {
           // Only poll slots whose Reactor session actually exists.
           if (!slot.sessionId || slot.members.length === 0) continue;
@@ -802,9 +831,15 @@ export function createReactorQueueServer(
                 await this.releaseMember(connId, member, "server", { notify: true });
               }
             }
+            // Force-drop if the slot is orphaned (listed members had no records),
+            // so a terminal session can never wedge a slot forever.
+            await this.dropSlot(slot.slotId, "server", { notify: true });
             freedAny = true;
           } else {
-            await this.setSlot({ ...slot, lastPollAt: now });
+            // Re-read before writing: `getSessionState` opened the input gate, so
+            // the slot may have just been deleted. Never re-persist a stale copy.
+            const fresh = await this.getSlot(slot.slotId);
+            if (fresh) await this.setSlot({ ...fresh, lastPollAt: now });
           }
         }
 
@@ -1031,8 +1066,7 @@ export function createReactorQueueServer(
 
       const slot = await this.getSlot(data.slotId);
       if (slot) {
-        const nextMembers = slot.members.filter((id) => id !== connId);
-        const lastMember = nextMembers.length === 0;
+        const lastMember = slot.members.filter((id) => id !== connId).length === 0;
 
         if (slot.sessionId) {
           await this.runRelease({
@@ -1043,22 +1077,108 @@ export function createReactorQueueServer(
           });
         }
 
-        if (lastMember) {
-          await this.deleteSlot(slot.slotId);
-          if (slot.sessionId) {
-            this.config.hooks.onSessionClosed?.(slot.sessionId, reason);
-            this.log("info", "session_closed", "Reactor session closed (last member left)", {
-              sessionId: slot.sessionId,
-              data: { reason },
-            });
+        // Re-read after `runRelease`: the input gate is open across that network
+        // call, so a concurrent handler may have mutated or deleted this slot.
+        // Writing back the pre-call snapshot is what resurrects a just-deleted
+        // slot into an orphan (members listed, member record gone), so apply the
+        // removal to the *current* record — or skip entirely if it's already gone.
+        const fresh = await this.getSlot(data.slotId);
+        if (fresh) {
+          const nextMembers = fresh.members.filter((id) => id !== connId);
+          if (nextMembers.length === 0) {
+            await this.deleteSlot(fresh.slotId);
+            if (fresh.sessionId) {
+              this.config.hooks.onSessionClosed?.(fresh.sessionId, reason);
+              this.log("info", "session_closed", "Reactor session closed (last member left)", {
+                sessionId: fresh.sessionId,
+                data: { reason },
+              });
+            }
+            this.scheduleAdminBroadcast();
+          } else {
+            await this.setSlot({ ...fresh, members: nextMembers });
           }
-          this.scheduleAdminBroadcast();
-        } else {
-          await this.setSlot({ ...slot, members: nextMembers });
         }
       }
 
       await this.deleteMember(connId);
+    }
+
+    /**
+     * Tear a slot down directly, independent of whether its member records still
+     * exist. Releases the Reactor session (if any), drops any member records the
+     * slot still lists, and deletes the slot. This is the recovery path for an
+     * *orphaned* slot — one listing members whose `member:` records were already
+     * deleted by a concurrent release — which `releaseMember` can never reach
+     * because it keys off the member record. Safe to call on an already-gone slot.
+     *
+     * Storage is torn down first (no network in between, so it lands atomically
+     * w.r.t. other handlers); the best-effort session release runs afterwards,
+     * once internal state is already consistent.
+     */
+    private async dropSlot(
+      slotId: string,
+      reason: "timeout" | "grace_timeout" | "server",
+      opts: { notify: boolean }
+    ): Promise<void> {
+      const slot = await this.getSlot(slotId);
+      if (!slot) return;
+
+      for (const connId of slot.members) {
+        if (opts.notify) this.sendTo(connId, { type: "expired", reason });
+        await this.deleteMember(connId);
+      }
+      await this.deleteSlot(slot.slotId);
+      this.scheduleAdminBroadcast();
+
+      if (slot.sessionId) {
+        await this.runRelease({ sessionId: slot.sessionId, userId: "", reason, lastMember: true });
+        this.config.hooks.onSessionClosed?.(slot.sessionId, reason);
+        this.log("info", "session_closed", "Reactor session closed (slot dropped)", {
+          sessionId: slot.sessionId,
+          data: { reason },
+        });
+      }
+    }
+
+    /**
+     * Self-heal slot/member drift. A release spans the `DELETE /sessions` network
+     * call with the input gate open, so it can interleave with a concurrent slot
+     * write and leave a slot referencing a connId whose `member:` record is gone
+     * — an orphan no normal path reaps (the reap and admin close both key off the
+     * member record). Prune stale connIds from every slot; if that empties a
+     * slot, drop it (releasing its Reactor session). Returns true if it freed a
+     * slot, so the caller can re-run admission.
+     */
+    private async reconcileSlots(): Promise<boolean> {
+      let freed = false;
+      for (const [slotKey] of await this.getAllSlots()) {
+        const slotId = slotKey.replace("slot:", "");
+        const slot = await this.getSlot(slotId);
+        if (!slot) continue;
+
+        const live: string[] = [];
+        for (const connId of slot.members) {
+          if (await this.getMember(connId)) live.push(connId);
+        }
+        if (live.length === slot.members.length) continue;
+
+        if (live.length === 0) {
+          this.log("warn", "slot_reconciled", "Dropped an orphaned slot (no live members)", {
+            sessionId: slot.sessionId ?? undefined,
+            data: { staleMembers: slot.members.length },
+          });
+          await this.dropSlot(slot.slotId, "server", { notify: false });
+          freed = true;
+        } else {
+          this.log("warn", "slot_reconciled", "Pruned stale members from a slot", {
+            sessionId: slot.sessionId ?? undefined,
+            data: { before: slot.members.length, after: live.length },
+          });
+          await this.setSlot({ ...slot, members: live });
+        }
+      }
+      return freed;
     }
 
     // ── broadcasting (coalesced, hibernation-safe) ────────────────────────────
