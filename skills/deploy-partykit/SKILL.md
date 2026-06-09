@@ -1,6 +1,6 @@
 ---
 name: deploy-partykit
-description: Deploy a @reactor-team/queue PartyKit waiting-room server to production, two ways: the managed PartyKit platform (`partykit deploy` → `<name>.<github-user>.partykit.dev`, no Cloudflare account needed, secrets via `partykit secret put`) or cloud-prem on your own Cloudflare account (`partykit deploy --domain` → `<name>.<your-org>.workers.dev`, Workers Paid + API token + workers.dev subdomain). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship beyond `partykit dev`. Covers both deploy commands, setting the queue's secrets, pointing your web app at the deployed host, the expected one-time PartyKit GitHub login, and the common footguns — free-plan Durable Objects failure, wrong Cloudflare account id, the deploy silently falling back to the managed platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers *optionally* automating the deploy as a GitHub Action on every push to main — this is opt-in (suggest it; only add it when the user explicitly asks) and **requires cloud-prem** — including how to generate the `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` PartyKit variables for non-interactive CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets.
+description: Deploy a @reactor-team/queue PartyKit waiting-room server to production, two ways: the managed PartyKit platform (`partykit deploy` → `<name>.<github-user>.partykit.dev`, no Cloudflare account needed, secrets via `partykit secret put`) or cloud-prem on your own Cloudflare account (`partykit deploy --domain` → `<name>.<your-org>.workers.dev`, Workers Paid + API token + workers.dev subdomain). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship beyond `partykit dev`. Covers both deploy commands, setting the queue's secrets, pointing your web app at the deployed host, the expected one-time PartyKit GitHub login, and the common footguns — free-plan Durable Objects failure, wrong Cloudflare account id, the deploy silently falling back to the managed platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers *optionally* automating the deploy as a GitHub Action on every push to main — this is opt-in (suggest it; only add it when the user explicitly asks) and **requires cloud-prem** — including how to generate the `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` PartyKit variables for non-interactive CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets, which an agent can set over the `gh` CLI on explicit approval (verifying each isn't already set first, so it never clobbers existing secrets).
 ---
 
 # Deploying a `@reactor-team/queue` room to production
@@ -18,6 +18,12 @@ users never see its URL. It deploys **separately** from your web app — the app
 pick, keep the room's runtime config (`model`, `coordinatorUrl`, `maxSessions`,
 `usersPerSession`, durations, …) **in code** in `createReactorQueueServer({ … })`,
 so a deploy only carries the secrets (the building skill covers this).
+
+> **Match the project's package manager.** Commands here invoke the `partykit`
+> CLI as `pnpm exec partykit` or `npx partykit` — use whichever the workspace
+> uses. Infer it from the lockfile and suggest the matching command rather than
+> guessing: `pnpm-lock.yaml` → `pnpm exec partykit`, `package-lock.json` →
+> `npx partykit`, `yarn.lock` → `yarn partykit`, `bun.lockb` → `bunx partykit`.
 
 ## Two ways to deploy
 
@@ -303,10 +309,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: production # branch-scoped to main
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
       - run: npm ci
       - name: Deploy to Cloudflare
         env:
@@ -332,6 +338,52 @@ jobs:
 `CLOUDFLARE_*` + `--domain` keep it cloud-prem; `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN`
 satisfy the CLI's auth without a browser. A `concurrency` group means a newer
 push supersedes an in-flight deploy instead of racing it.
+
+## 4. Setting the environment secrets (the agent can do this)
+
+Most of this step is just getting the seven values into the right environment. If
+you're driving this skill through an agent, it can set them for you over the `gh`
+CLI — but only as an explicit, opt-in step, and without trampling anything that's
+already there:
+
+- **Offer, don't assume.** The agent should _propose_ setting the secrets and act
+  only on explicit user approval. Never create or overwrite repository or
+  environment secrets unprompted.
+- **Verify first, never clobber.** Before writing, list what already exists
+  (`gh secret list --env <env>`) and **skip any secret that's already set**,
+  unless the user explicitly asks to overwrite it. Report what was set vs.
+  skipped.
+- **The agent can only set values it's been given.** It cannot generate
+  `PARTYKIT_TOKEN` / `PARTYKIT_LOGIN` (that needs your interactive
+  `partykit token generate`), and it has no access to your Cloudflare
+  credentials — you supply those. It can set the rest (the deploy host, the
+  Reactor API key, the admin password) from values you hand it.
+- **Needs repo admin.** Creating environments and setting their secrets requires
+  admin on the repo; the agent should confirm its `gh` auth has it first.
+
+The commands:
+
+```bash
+REPO=<owner>/<repo>
+ENV=production # GitHub matches the environment name case-insensitively
+
+# 1. Create/lock the environment to main so secrets can't leak to PR/fork runs.
+gh api -X PUT "repos/$REPO/environments/$ENV" --input - <<'JSON'
+{ "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true } }
+JSON
+gh api -X POST "repos/$REPO/environments/$ENV/deployment-branch-policies" \
+  -f name=main -f type=branch
+
+# 2. See what's already set — don't overwrite without intent.
+gh secret list --env "$ENV" --repo "$REPO"
+
+# 3. Set each MISSING secret (value piped via stdin to keep it out of argv).
+printf '%s' "<value>" | gh secret set <NAME> --env "$ENV" --repo "$REPO"
+```
+
+> Setting a value still passes it through a shell command (captured in local
+> terminal logs). For the most sensitive ones — the Cloudflare API token
+> especially — you may prefer to run the `gh secret set` line yourself.
 
 # Footguns (read before you ship)
 
