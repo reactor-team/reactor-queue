@@ -120,6 +120,7 @@ intact — run it locally if you've touched any of those.
 pnpm install     # bootstrap the workspace
 pnpm build       # build all packages (tsup)
 pnpm typecheck   # tsc --noEmit across packages
+pnpm test        # run the unit test suite (vitest)
 pnpm dev         # watch-build all packages
 pnpm example     # run the basic example (web + PartyKit)
 pnpm format      # format with Prettier
@@ -131,7 +132,7 @@ See the [README](./README.md) for the full architecture and configuration refere
 
 - Keep PRs focused and small. Separate refactors from feature work.
 - Add or update tests for any behaviour change.
-- Run `pnpm format` and `pnpm typecheck` before pushing.
+- Run `pnpm format`, `pnpm typecheck`, and `pnpm test` before pushing.
 - Make sure every commit on the PR is signed off (`git commit -s`).
 - For larger changes, open an issue or discussion first to align on the
   approach.
