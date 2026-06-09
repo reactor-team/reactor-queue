@@ -150,10 +150,38 @@ export class ReactorQueueClient {
     }
   }
 
-  /** The Reactor session ended client-side; free the slot so the queue slides. */
+  /**
+   * The Reactor session ended client-side (e.g. the user quit the turn): free
+   * the slot so the queue slides, and return to `idle` so the app can show its
+   * menu or a "play again" prompt. From an in-session phase this mirrors
+   * {@link leave} — tear the socket down and reset to `idle` — but it sends
+   * `session_ended` (not `leave`) so the server admits the next person, and it
+   * drops the token: unlike `leave`, the session is already over, so no
+   * in-flight SDK `DELETE /sessions` needs a JWT.
+   *
+   * Without the phase reset the client would be wedged in `active` with no
+   * `sessionId` ("phantom-active"), a state nothing else recovers from. Re-enter
+   * the line with {@link rejoin} (the server only re-queues on connect).
+   *
+   * This also doubles as unmount cleanup, so it can fire *after* the server has
+   * already moved us to a terminal phase (`expired`/`rejected`) or after
+   * `leave()` set `idle`. In those cases we only clear the session fields and
+   * leave the existing phase — and the already-closed socket — untouched.
+   */
   endSession(): void {
     this.send({ type: "session_ended" });
-    this.setState({ sessionId: null, token: null, tokenExpiresAt: null });
+    const inSession = this.state.phase === "active" || this.state.phase === "starting";
+    if (inSession) {
+      this.clearRetry();
+      this.clearRefresh();
+      this.teardownSocket();
+    }
+    this.setState({
+      phase: inSession ? "idle" : this.state.phase,
+      sessionId: null,
+      token: null,
+      tokenExpiresAt: null,
+    });
   }
 
   /** Tear everything down. The instance is unusable afterwards. */
