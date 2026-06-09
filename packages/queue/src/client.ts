@@ -179,6 +179,7 @@ export class ReactorQueueClient {
     this.setState({
       phase: inSession ? "idle" : this.state.phase,
       sessionId: null,
+      connectionId: null,
       token: null,
       tokenExpiresAt: null,
     });
@@ -342,6 +343,7 @@ export class ReactorQueueClient {
         this.setState({
           phase: "active",
           sessionId: msg.sessionId,
+          connectionId: msg.connectionId,
           sessionEndsAt: msg.expiresAt,
           sessionDurationMs: msg.sessionDurationMs,
           secondsLeft: null,
@@ -361,9 +363,14 @@ export class ReactorQueueClient {
       case "expired":
         this.failPending(new Error("session expired"));
         this.clearRefresh();
-        // Keep the token (it's a short-lived JWT, not session-scoped) so the
-        // SDK's teardown DELETE can still resolve one; it ages out on its own.
-        this.setState({ phase: "expired", sessionId: null, reason: msg.reason });
+        // Keep the token (it's a short-lived JWT, not session-scoped) so any
+        // in-flight SDK call can still resolve one; it ages out on its own.
+        this.setState({
+          phase: "expired",
+          sessionId: null,
+          connectionId: null,
+          reason: msg.reason,
+        });
         this.teardownSocket();
         break;
 

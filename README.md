@@ -80,7 +80,7 @@ don't need any of that to start. To go live, see [Deployment](#deployment).
 ### 2. Client (React)
 
 Requires [`@reactor-team/js-sdk`](https://github.com/reactor-team/js-sdk)
-**2.11.2+** (for `ConnectOptions.sessionId`).
+**2.12.0+** (for `ConnectOptions.connectionId`).
 
 ```tsx
 import { ReactorQueueProvider, useReactorQueue } from "@reactor-team/queue/react";
@@ -104,13 +104,13 @@ function Gate() {
     );
   if (q.phase === "admitted") return <button onClick={q.claim}>Enter</button>;
   if (q.phase === "expired") return <button onClick={q.rejoin}>Rejoin</button>;
-  if (q.phase !== "active" || !q.sessionId) return null;
+  if (q.phase !== "active" || !q.sessionId || !q.connectionId) return null;
 
   return (
     <ReactorProvider
       modelName="helios"
       getJwt={q.getJwt}
-      connectOptions={{ autoConnect: true, sessionId: q.sessionId }}
+      connectOptions={{ autoConnect: true, sessionId: q.sessionId, connectionId: q.connectionId }}
     >
       <SessionBridge />
       {/* your model UI */}
@@ -279,10 +279,12 @@ The queue server is the **single source of truth**. It:
 
 1. Lines users up FIFO and reserves a capacity **slot** for the head (fill open
    slots before opening new ones) up to `maxSessions` × `usersPerSession` members.
-2. **Creates the Reactor session lazily on `claim()`** (`POST /sessions`), then
-   sends `session_ready { sessionId }` so the client attaches via
-   `connect({ sessionId })`. Nothing is created during grace, so an abandoned
-   admission never orphans a GPU session.
+2. **Creates the Reactor session lazily on `claim()`** (`POST /sessions`) **and
+   mints a WebRTC connection under it** (`POST .../connections`), then sends
+   `session_ready { sessionId, connectionId }` so the client attaches via
+   `connect({ sessionId, connectionId })`. Nothing is created during grace, so an
+   abandoned admission never orphans a GPU session. The server owns both the
+   session and every connection — the client only adopts them.
 3. **Mints the Reactor JWT itself** (API key is a server secret) and sends it
    only to admitted users — _the queue returns the JWT_.
 4. Issues **very short-lived tokens** (default 60s). The client refreshes them
@@ -310,37 +312,59 @@ Admission **fills an open slot before opening a new one**: if any slot has
 `members.length < usersPerSession`, the head of the queue takes a seat there;
 otherwise, when `slotCount < maxSessions`, a new (sessionless) slot is opened.
 
-**The Reactor session is created on `claim()`, not at admission.** When the
-first member of a slot claims, the server calls `POST /sessions`, stores the id
-on the slot, and sends `session_ready { sessionId }`. Other members of the same
-slot reuse that id when they claim. This is the key fix against **orphaned
-sessions**: an admitted user who never claims (grace timeout, tab close) frees
-their slot with no GPU session ever created.
+**The Reactor session and each member's connection are created on `claim()`, not
+at admission.** When the first member of a slot claims, the server calls
+`POST /sessions` and stores the id on the slot; every claiming member then gets
+its own server-minted WebRTC connection (`POST .../connections`). The server
+sends `session_ready { sessionId, connectionId }` and the member reuses the
+slot's session id. This is the key fix against **orphaned sessions**: an admitted
+user who never claims (grace timeout, tab close) frees their slot with no GPU
+session ever created.
 
 When the **last member** leaves a slot (timeout, `session_ended`, tab close, or
 poll seeing `CLOSED`/`INACTIVE`), the server `DELETE`s its Reactor session if
-one was created (and `RQ_STOP_SESSIONS` is on) and removes the slot.
+one was created (and `RQ_STOP_SESSIONS` is on) and removes the slot. A
+**non-last** member leaving just frees its seat — the session stays alive for the
+others, and the platform reaps that member's connection on its own.
 
 **Capacity** exposed to clients is `maxSessions × usersPerSession` (total live
 members). `active` in queue messages is the current member count.
 
-**`usersPerSession > 1`** is supported in the queue’s accounting today; platform
-multi-connection per session (sharing one WebRTC session across N clients) is
-still rolling out — default `1` matches current behavior.
+**`usersPerSession > 1`** now works end-to-end: N members share one Reactor
+session, each with a distinct server-minted connection. Note the platform caps
+`connections_per_session` at **4 by default** — to put more than 4 members on a
+single session, raise that quota for your account, or the connection mint will
+`429` and the queue spills the member into another (or new) session, using more
+GPU. The connection mint is the real capacity test: if a session is at its cap,
+the queue retries on another open session before opening a new one.
+
+### Who creates and who stops
+
+The **server owns the full lifecycle** — it creates the session, mints every
+connection, and is the **only** thing that stops the session (`DELETE /sessions`
+on the last member, via timeout, `session_ended`, tab close, the liveness poll,
+or admin action). Because the client attaches with `connect({ sessionId, … })`,
+the SDK treats it as an _adopter_ and never issues `DELETE` on disconnect — so a
+client tab closing leaves the session running for any other members and the
+**queue** decides when it ends. Keep `RQ_STOP_SESSIONS` on (the default): the
+client is not even a fallback stopper, so turning it off leaves nothing but
+Reactor's idle timeout to reclaim the GPU.
 
 ### js-sdk requirement
 
 Clients must attach with
-[`ConnectOptions.sessionId`](https://github.com/reactor-team/js-sdk), which
-shipped in `@reactor-team/js-sdk` **2.11.2**. Install that version (or later) and
-pass `sessionId` through your provider:
+[`ConnectOptions.sessionId` and `connectionId`](https://github.com/reactor-team/js-sdk),
+which shipped in `@reactor-team/js-sdk` **2.12.0**. Install that version (or
+later) and pass **both** through your provider — the queue exposes them as
+`q.sessionId` and `q.connectionId` once `phase === "active"`:
 
 ```tsx
-connectOptions={{ autoConnect: true, sessionId: q.sessionId }}
+connectOptions={{ autoConnect: true, sessionId: q.sessionId, connectionId: q.connectionId }}
 ```
 
-The queue client sets `sessionId` from the `admitted` WebSocket message — there
-is no `reportSession()` or `session_started` wire message.
+Pass both: omitting `sessionId` would make the SDK create (and own, and delete)
+its own session, bypassing the queue. There is no `reportSession()` or
+`session_started` wire message.
 
 ## Lifecycle / phases
 
@@ -354,13 +378,13 @@ The client exposes a single `phase` you can switch on:
 | `connecting` | Socket opening                                             | spinner                          |
 | `queued`     | In line                                                    | "Position {position} of {total}" |
 | `admitted`   | Capacity slot reserved, `graceMs` to act. No session yet   | "You're up — Enter"              |
-| `starting`   | `claim()`ed; server is creating the session                | "Starting…" spinner              |
-| `active`     | `session_ready` received; `sessionId` set — attach the SDK | the model                        |
+| `starting`   | `claim()`ed; server is creating the session + connection   | "Starting…" spinner              |
+| `active`     | `session_ready`; `sessionId` + `connectionId` set — attach | the model                        |
 | `expired`    | Time elapsed / reclaimed; session stopped                  | "Rejoin"                         |
 | `rejected`   | Duplicate tab; auto-retries                                | "Open in one tab"                |
 
-`sessionId` is `null` until `active`; gate your `<ReactorProvider>` on
-`phase === "active" && sessionId`.
+`sessionId` and `connectionId` are `null` until `active`; gate your
+`<ReactorProvider>` on `phase === "active" && sessionId && connectionId`.
 
 `sessionEndsAt` (unix ms) drives countdowns: while `admitted` it's the
 admission-grace deadline ("time to enter"), while `active` it's the session
@@ -375,7 +399,8 @@ deadline. A `time_warning` (with `secondsLeft`) also arrives
 | `position`, `total`       | `queued`                         | Line position (1-based)                            |
 | `active`                  | queue updates                    | Members currently in a session                     |
 | `capacity`                | `admitted` / `queue_position`    | Max live members (`maxSessions × usersPerSession`) |
-| `sessionId`               | `admitted`                       | Pass to `connectOptions.sessionId`                 |
+| `sessionId`               | `active`                         | Pass to `connectOptions.sessionId`                 |
+| `connectionId`            | `active`                         | Pass to `connectOptions.connectionId`              |
 | `token`, `tokenExpiresAt` | `token` message                  | Short-lived JWT; `getJwt` refreshes                |
 | `sessionEndsAt`           | `admitted` / `claim`             | Countdown (grace, then full session)               |
 | `sessionDurationMs`       | `admitted`                       | Full budget after `claim()`                        |

@@ -21,8 +21,8 @@ importers:
         specifier: ^0.9.5
         version: 0.9.5(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       '@reactor-team/js-sdk':
-        specifier: 2.11.2
-        version: 2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
+        specifier: 2.12.0
+        version: 2.12.0(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       '@reactor-team/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -635,8 +635,8 @@ packages:
     peerDependencies:
       react: '>=18'
 
-  '@reactor-team/js-sdk@2.11.2':
-    resolution: {integrity: sha512-rlnilu1PhOZpJS1TnYj77Iqvctbtl6Ee6zjzSUAaXUPNOISa0H4xejdCsLGBA0OFJwZITC+XsNOte6iFmM7zGQ==}
+  '@reactor-team/js-sdk@2.12.0':
+    resolution: {integrity: sha512-64WcP8tmUSbSjdv3joEG9ddJIL6PgK35N2lG8BE6yN153dhMHB4TTVkUxN0OUr6ZF2uXyLUJBHKzPymbp0aRZQ==}
     engines: {node: '>=18'}
     peerDependencies:
       hls.js: ^1.6.0
@@ -810,6 +810,10 @@ packages:
 
   as-table@1.0.55:
     resolution: {integrity: sha512-xvsWESUJn0JN421Xb9MQw6AsMHRCUknCe0Wjlxvjud80mU4E6hQf1A6NzQKcYNmYw62MfzEtXc+badstZP3JpQ==}
+
+  awaitqueue@3.3.0:
+    resolution: {integrity: sha512-zLxDhzQbzHmOyvxi7g3OlfR7jLrcmElStPxfLPpJkrFSDm71RSrY/MvsDA8Btlx8X1nOHUzGhQvc6bdUjL2f2w==}
+    engines: {node: '>=20'}
 
   bundle-require@5.1.0:
     resolution: {integrity: sha512-3WrrOuZiyaaZPWiEt4G3+IffISVC9HYlWueJEBWED4ZH4aIAC2PnkdnuRrR94M+w6yGWn4AglWtJtBI8YqvgoA==}
@@ -1740,14 +1744,16 @@ snapshots:
 
   '@reactor-models/helios@0.9.5(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
     dependencies:
-      '@reactor-team/js-sdk': 2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
+      '@reactor-team/js-sdk': 2.12.0(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))
       react: 19.2.6
     transitivePeerDependencies:
       - hls.js
+      - supports-color
       - zustand
 
-  '@reactor-team/js-sdk@2.11.2(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
+  '@reactor-team/js-sdk@2.12.0(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.14(@types/react@19.2.15)(react@19.2.6))':
     dependencies:
+      awaitqueue: 3.3.0
       mp4box: 2.3.0
       react: 19.2.6
       sdp-transform: 3.0.0
@@ -1755,6 +1761,8 @@ snapshots:
       zustand: 5.0.14(@types/react@19.2.15)(react@19.2.6)
     optionalDependencies:
       hls.js: 1.6.16
+    transitivePeerDependencies:
+      - supports-color
 
   '@rollup/rollup-android-arm-eabi@4.60.4':
     optional: true
@@ -1866,6 +1874,12 @@ snapshots:
   as-table@1.0.55:
     dependencies:
       printable-characters: 1.0.42
+
+  awaitqueue@3.3.0:
+    dependencies:
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   bundle-require@5.1.0(esbuild@0.27.7):
     dependencies:
