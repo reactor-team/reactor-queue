@@ -19,6 +19,12 @@ pick, keep the room's runtime config (`model`, `coordinatorUrl`, `maxSessions`,
 `usersPerSession`, durations, …) **in code** in `createReactorQueueServer({ … })`,
 so a deploy only carries the secrets (the building skill covers this).
 
+> **Match the project's package manager.** Commands here invoke the `partykit`
+> CLI as `pnpm exec partykit` or `npx partykit` — use whichever the workspace
+> uses. Infer it from the lockfile and suggest the matching command rather than
+> guessing: `pnpm-lock.yaml` → `pnpm exec partykit`, `package-lock.json` →
+> `npx partykit`, `yarn.lock` → `yarn partykit`, `bun.lockb` → `bunx partykit`.
+
 ## Two ways to deploy
 
 |                    | **Managed** (Option A)              | **Cloud-prem** (Option B)                          |
