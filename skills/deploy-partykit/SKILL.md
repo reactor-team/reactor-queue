@@ -1,27 +1,98 @@
 ---
 name: deploy-partykit
-description: Deploy a @reactor-team/queue PartyKit waiting-room server to your own Cloudflare account (cloud-prem) so the room runs on your Cloudflare Workers + Durable Objects under a `<name>.<your-org>.workers.dev` host (or a domain you control). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship the PartyKit room beyond `partykit dev`. Covers the Cloudflare account + API token setup, the Workers Paid and workers.dev-subdomain requirements, the inline `partykit deploy --domain` command, passing the queue's secrets with `--var`, the expected (and harmless) one-time PartyKit GitHub login, pointing your web app at the deployed host, and the common footguns — free-plan Durable Objects failure, wrong account id, the deploy silently falling back to PartyKit's hosted platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers *optionally* automating the deploy as a GitHub Action on every push to main — this is opt-in, so suggest it and only add it when the user explicitly asks — including how to generate the `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` PartyKit variables for non-interactive CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets.
+description: Deploy a @reactor-team/queue PartyKit waiting-room server to production, two ways: the managed PartyKit platform (`partykit deploy` → `<name>.<github-user>.partykit.dev`, no Cloudflare account needed, secrets via `partykit secret put`) or cloud-prem on your own Cloudflare account (`partykit deploy --domain` → `<name>.<your-org>.workers.dev`, Workers Paid + API token + workers.dev subdomain). Use after building a queue demo with the building-reactor-queue-demos skill, when you're ready to ship beyond `partykit dev`. Covers both deploy commands, setting the queue's secrets, pointing your web app at the deployed host, the expected one-time PartyKit GitHub login, and the common footguns — free-plan Durable Objects failure, wrong Cloudflare account id, the deploy silently falling back to the managed platform, secrets from `.env` not being uploaded, and custom-subdomain zones being Enterprise-only. Also covers *optionally* automating the deploy as a GitHub Action on every push to main — this is opt-in (suggest it; only add it when the user explicitly asks) and **requires cloud-prem** — including how to generate the `PARTYKIT_TOKEN`/`PARTYKIT_LOGIN` PartyKit variables for non-interactive CI auth (since CI can't do the browser login) and branch-scoped GitHub Environment secrets.
 ---
 
-# Deploying a `@reactor-team/queue` room to Cloudflare (cloud-prem)
+# Deploying a `@reactor-team/queue` room to production
 
 You've built a queue demo (see the `building-reactor-queue-demos` skill): a
 `partykit.json` and a `partykit/server.ts` that does
 `export default createReactorQueueServer({ … })`, plus a web app that connects to
-it. So far it only runs under `partykit dev`. This skill ships the PartyKit room
-to **production on your own Cloudflare account** — _cloud-prem_: the room runs on
-**your** Cloudflare Workers + Durable Objects, not on PartyKit's hosted platform.
+it. So far it only runs under `partykit dev`. This skill ships it to production —
+either on **PartyKit's managed platform** (simplest, no Cloudflare) or on **your
+own Cloudflare account** (_cloud-prem_).
 
 The deployed room is a backend WebSocket endpoint your web app talks to; end
 users never see its URL. It deploys **separately** from your web app — the app
-(Vercel, etc.) just needs the room's host in one env var.
+(Vercel, etc.) just needs the room's host in one env var. Whichever option you
+pick, keep the room's runtime config (`model`, `coordinatorUrl`, `maxSessions`,
+`usersPerSession`, durations, …) **in code** in `createReactorQueueServer({ … })`,
+so a deploy only carries the secrets (the building skill covers this).
 
-> **There are two ways to deploy a PartyKit app.** `partykit deploy` with no
-> `--domain` publishes to PartyKit's **hosted platform** (`*.partykit.dev`) —
-> quick, but it runs on infrastructure you don't own. This skill uses
-> **cloud-prem** instead: you pass `--domain` + your Cloudflare credentials and
-> the room lands on **your** account. Prefer cloud-prem for anything you want to
-> own, rate-limit, or keep on your own org's domain.
+## Two ways to deploy
+
+|                    | **Managed** (Option A)              | **Cloud-prem** (Option B)                          |
+| ------------------ | ----------------------------------- | -------------------------------------------------- |
+| Runs on            | PartyKit's infrastructure           | **your** Cloudflare account                        |
+| Host               | `<name>.<github-user>.partykit.dev` | `<name>.<your-org>.workers.dev` (or your domain)   |
+| Cloudflare account | not needed                          | required (**Workers Paid**)                        |
+| Setup              | one command + a GitHub login        | account id + API token + a `workers.dev` subdomain |
+| Best for           | quick demos, least setup            | owning the infra/domain, **CI auto-deploy**        |
+
+Pick **managed** if you just want it live with the least setup and don't mind it
+running on PartyKit's infrastructure. Pick **cloud-prem** if you want the room on
+your own account/domain — and note the **push-to-main CI pipeline in this skill
+requires cloud-prem** (it deploys with your Cloudflare credentials).
+
+# Option A — Managed (PartyKit's hosted platform)
+
+The simplest path, and it needs **no Cloudflare account**. PartyKit hosts the room
+on its own infrastructure at `<name>.<your-github-username>.partykit.dev`, where
+`name` is the `name` field in your `partykit.json`.
+
+**Prerequisites:** just `partykit` as a devDependency plus your `partykit.json` +
+`partykit/server.ts`. No Cloudflare, no plan, no Durable Objects setup.
+
+## 1. Deploy
+
+From the directory that contains `partykit.json`:
+
+```bash
+pnpm exec partykit deploy
+```
+
+The **first** run opens a browser for a one-time GitHub device authorization,
+then deploys. Provisioning the `*.partykit.dev` host takes up to ~2 minutes the
+first time. (This is the same login the CLI does for cloud-prem — see the GitHub
+footgun below; it's expected and harmless.)
+
+## 2. Set the secrets
+
+Push the queue's secrets to the deployment — non-secret config stays baked into
+`createReactorQueueServer`:
+
+```bash
+pnpm exec partykit secret put RQ_REACTOR_API_KEY
+pnpm exec partykit secret put RQ_ADMIN_PASSWORD     # only if you enabled /admin
+```
+
+`partykit secret put` prompts for the value and stores it encrypted on the
+deployment — it never touches your repo. Manage them with `partykit secret list`
+/ `partykit secret delete`. (You can instead pass `--var NAME=value` on `deploy`,
+but `secret put` keeps values out of your shell history.)
+
+## 3. Point your web app at it
+
+Set the one browser variable to the managed host:
+
+```bash
+NEXT_PUBLIC_PARTYKIT_HOST=<name>.<your-github-username>.partykit.dev
+```
+
+## Re-deploying (managed)
+
+Re-run `pnpm exec partykit deploy` to push changes; secrets persist across
+deploys. Tail live logs with `pnpm exec partykit tail`.
+
+> **Want automated deploys?** The push-to-main CI pipeline in this skill is built
+> on cloud-prem (Option B). If you need deploy-on-merge, set up cloud-prem rather
+> than managed.
+
+# Option B — Cloud-prem (your own Cloudflare account)
+
+Runs the room on **your** Cloudflare Workers + Durable Objects under a host you
+control. More setup than managed, but you own the infrastructure and domain — and
+it's what the CI pipeline below builds on.
 
 ## Before you deploy
 
@@ -32,11 +103,6 @@ users never see its URL. It deploys **separately** from your web app — the app
 - That account's **Account ID** and an **API token** (see below).
 - A **`workers.dev` subdomain** enabled on the account (gives you
   `<your-org>.workers.dev`), or a domain you control as a Cloudflare zone.
-
-Keep the room's runtime config (`model`, `coordinatorUrl`, `maxSessions`,
-`usersPerSession`, durations, …) **in code** in `createReactorQueueServer({ … })`.
-Then the deploy only has to carry the two secrets, and there's no per-deploy
-config to keep in sync. (The building skill covers this pattern.)
 
 ## One-time Cloudflare setup
 
@@ -161,10 +227,15 @@ the existing Worker in place. No teardown.
 > extra secrets, and a deploy-on-merge side effect the user should choose
 > knowingly.
 
-Once the manual deploy works, you can wire it into CI so a merge to `main` ships
-the room with no manual step. The catch is auth: locally the PartyKit CLI does a
-one-time interactive **GitHub login**, and CI can't open a browser. The fix is a
-long-lived PartyKit token.
+This pipeline builds on **cloud-prem (Option B)** — it deploys with your
+Cloudflare credentials to your own domain. If you went with the managed platform
+(Option A), there's no CI workflow here; redeploy by re-running
+`partykit deploy` by hand.
+
+Once the cloud-prem deploy works, you can wire it into CI so a merge to `main`
+ships the room with no manual step. The catch is auth: locally the PartyKit CLI
+does a one-time interactive **GitHub login**, and CI can't open a browser. The
+fix is a long-lived PartyKit token.
 
 ## 1. Generate the PartyKit variables (`PARTYKIT_TOKEN` + `PARTYKIT_LOGIN`)
 
@@ -296,8 +367,9 @@ plan error. Double-check the account id and that the token manages that account.
 ### 5. No `--domain` → hosted platform
 
 Omit `--domain` (or the Cloudflare creds) and PartyKit deploys to its own hosted
-platform (`*.partykit.dev`) instead of your Cloudflare account. If you wanted
-cloud-prem, always pass both.
+platform (`*.partykit.dev`) — that's Option A, and fine if intended. But if you
+meant **cloud-prem**, this is the silent trap: always pass `--domain` + the
+Cloudflare credentials together, or you'll quietly ship to the managed platform.
 
 ### 6. Subdomains as separate zones are Enterprise-only
 
