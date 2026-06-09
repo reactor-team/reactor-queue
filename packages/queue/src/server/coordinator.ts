@@ -36,16 +36,23 @@ export class CoordinatorClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly apiVersion: number;
+  private readonly webrtcVersion: string;
 
   private serverJwt: { jwt: string; expiresAt: number } | null = null;
   /** TTL for the server's own admin JWT. Longer than client tokens; re-minted lazily. */
   private static readonly SERVER_JWT_TTL_SECONDS = 600;
   private static readonly SKEW_SECONDS = 30;
 
-  constructor(opts: { baseUrl: string; apiKey: string; apiVersion: number }) {
+  constructor(opts: {
+    baseUrl: string;
+    apiKey: string;
+    apiVersion: number;
+    webrtcVersion: string;
+  }) {
     this.baseUrl = opts.baseUrl;
     this.apiKey = opts.apiKey;
     this.apiVersion = opts.apiVersion;
+    this.webrtcVersion = opts.webrtcVersion;
   }
 
   private versionHeaders(): Record<string, string> {
@@ -156,6 +163,42 @@ export class CoordinatorClient {
     const sessionId = data.session_id;
     if (!sessionId) throw new Error("createSession: no session_id in response");
     return sessionId;
+  }
+
+  /**
+   * Register a WebRTC connection under an existing session and return the
+   * server-minted `connection_id`. This is a transport call (carries
+   * `Reactor-WebRTC-Version`, not the API-version headers) and must use a JWT
+   * for the session's owning user — the server JWT, minted from the same API
+   * key that created the session, satisfies that.
+   *
+   * A {@link CoordinatorError} with `status === 429` means the session hit its
+   * `connections_per_session` cap; the caller falls back to another/new session.
+   */
+  async createConnection(sessionId: string): Promise<number> {
+    const jwt = await this.getServerJwt();
+    const endpoint = `/sessions/${encodeURIComponent(sessionId)}/transport/webrtc/connections`;
+    const res = await fetch(`${this.baseUrl}${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${jwt}`,
+        "Reactor-WebRTC-Version": this.webrtcVersion,
+      },
+      body: JSON.stringify({ client_info: { sdk_version: "0.1.0", sdk_type: "js" } }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => res.statusText);
+      throw new CoordinatorError(`POST ${endpoint}`, res.status, detail);
+    }
+
+    const data = (await res.json()) as { connection_id?: number };
+    const connectionId = data.connection_id;
+    if (typeof connectionId !== "number") {
+      throw new Error("createConnection: no connection_id in response");
+    }
+    return connectionId;
   }
 
   /** Force-close a session. Swallows "already gone" responses. */

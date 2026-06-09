@@ -17,6 +17,11 @@ import { CoordinatorClient, CoordinatorError } from "./coordinator";
 /** Max activity-log entries kept in the room's durable ring buffer. */
 const MAX_LOG_ENTRIES = 200;
 
+/** How many times a transient connection mint is retried before spilling to the next session. */
+const CONNECTION_MINT_ATTEMPTS = 3;
+/** Backoff between transient connection-mint retries, in ms. */
+const CONNECTION_MINT_RETRY_MS = 250;
+
 /**
  * Turn an arbitrary thrown value into a log-friendly message + structured data.
  * A {@link CoordinatorError} surfaces the endpoint, HTTP status, and (truncated)
@@ -46,6 +51,8 @@ interface MemberData {
   slotId: string;
   /** Reactor session id once the slot's session is created (on claim); null during grace. */
   sessionId: string | null;
+  /** Server-minted WebRTC connection id once claimed; null during grace. */
+  connectionId: number | null;
   /** Epoch ms when this member's slot is reclaimed (grace or full session). */
   expiresAt: number;
   warned: boolean;
@@ -115,6 +122,7 @@ export function createReactorQueueServer(
           baseUrl: c.coordinatorUrl,
           apiKey: c.apiKey,
           apiVersion: c.apiVersion,
+          webrtcVersion: c.webrtcVersion,
         });
       }
       return this.coordinator;
@@ -791,6 +799,17 @@ export function createReactorQueueServer(
         for (const [key, data] of members) {
           const connId = key.replace("member:", "");
 
+          // Liveness reconcile: if the member's PartyKit WS is gone but `onClose`
+          // never fired, release them so the slot seat frees and (on the last
+          // member) the server stops the session. The platform already reaped
+          // this member's WebRTC connection on its side. Skip members mid-claim —
+          // that network round-trip completes or grace-expires on its own.
+          if (!data.claiming && !this.room.getConnection(connId)) {
+            await this.releaseMember(connId, data, "server", { notify: false });
+            freedAny = true;
+            continue;
+          }
+
           if (now >= data.expiresAt) {
             const reason = data.claimed ? "timeout" : "grace_timeout";
             await this.releaseMember(connId, data, reason, { notify: true });
@@ -928,6 +947,7 @@ export function createReactorQueueServer(
           await this.setMember(connId, {
             slotId: slot.slotId,
             sessionId: null,
+            connectionId: null,
             expiresAt: Date.now() + this.config.admissionGraceMs,
             warned: false,
             claimed: false,
@@ -963,48 +983,38 @@ export function createReactorQueueServer(
     }
 
     /**
-     * The member confirmed entry. Create the slot's Reactor session if it does
-     * not exist yet (or reuse it for a multi-member slot), start the full
-     * session timer, and hand back the session id to attach to.
+     * The member confirmed entry. Seat them on a session that accepts a freshly
+     * minted WebRTC connection (their own slot's, an existing one with room, or a
+     * new one), start the full session timer, and hand back the `sessionId` +
+     * server-minted `connectionId` to attach with. The server owns both, so the
+     * client only adopts — it never creates or stops anything.
      */
     private async claimMember(connId: string, member: MemberData): Promise<void> {
-      // Mark mid-claim *before* the first yield. `acquireSession` can be a slow
-      // network call and the DO input gate is open across non-storage awaits, so
-      // a duplicate `claim` could otherwise slip past the `!claimed` guard and
-      // acquire a second session. This persisted flag closes that window; it is
-      // cleared on completion or failure (and a stuck flag self-heals on grace
-      // expiry, which still releases the member).
+      // Mark mid-claim *before* the first yield. Acquiring a session and minting
+      // a connection are network calls and the DO input gate is open across them,
+      // so a duplicate `claim` could otherwise slip past the `!claimed` guard.
+      // This persisted flag closes that window; it is cleared on completion or
+      // failure (a stuck flag self-heals on grace expiry, which still releases
+      // the member).
       await this.setMember(connId, { ...member, claiming: true });
 
-      const slot = await this.getSlot(member.slotId);
-      if (!slot) {
-        // Slot vanished (e.g. reaped); nothing to claim.
+      const placement = await this.placeMemberWithConnection(connId, member);
+      if (!placement) {
+        // No session could take the member (all at their connection cap, or
+        // session creation failed). The admin log already carries the
+        // Coordinator status/body from the failing call.
         await this.setMember(connId, { ...member, claiming: false });
+        this.sendTo(connId, { type: "error", message: "no_capacity" });
         return;
       }
 
-      let sessionId = slot.sessionId;
-      if (!sessionId) {
-        try {
-          sessionId = await this.runAcquire(this.config.model);
-        } catch (err) {
-          // The most important failure to surface: e.g. the account hit its
-          // concurrent-session quota, the key expired, or the model is wrong.
-          // describeError pulls the Coordinator's HTTP status + body into `data`.
-          this.reportError("session_create_failed", err, { connId });
-          await this.setMember(connId, { ...member, claiming: false });
-          this.sendTo(connId, { type: "error", message: "session_create_failed" });
-          return;
-        }
-        await this.setSlot({ ...slot, sessionId });
-        this.config.hooks.onSessionCreated?.(sessionId);
-        this.log("info", "session_created", "Created a new Reactor session", { connId, sessionId });
-      }
-
+      const { slotId, sessionId, connectionId } = placement;
       const expiresAt = Date.now() + this.config.sessionDurationMs;
       await this.setMember(connId, {
         ...member,
+        slotId,
         sessionId,
+        connectionId,
         expiresAt,
         warned: false,
         claimed: true,
@@ -1014,6 +1024,7 @@ export function createReactorQueueServer(
       this.sendTo(connId, {
         type: "session_ready",
         sessionId,
+        connectionId,
         sessionDurationMs: this.config.sessionDurationMs,
         expiresAt,
       });
@@ -1021,9 +1032,159 @@ export function createReactorQueueServer(
       this.log("info", "session_ready", "User claimed and entered the session", {
         connId,
         sessionId,
+        data: { connectionId },
       });
       await this.scheduleNextAlarm();
       this.scheduleAdminBroadcast();
+    }
+
+    /**
+     * Seat a claiming member on a slot whose Reactor session accepts a freshly
+     * minted WebRTC connection, returning that placement. Tries the member's own
+     * slot first, then any other slot with a free seat, then a brand-new slot
+     * (bounded by `maxSessions`). The connection mint is the real capacity test:
+     * a 429 means the session hit its `connections_per_session` cap, so we spill
+     * to the next candidate; transient mint errors retry on the same session.
+     * Returns null when nothing could take the member.
+     */
+    private async placeMemberWithConnection(
+      connId: string,
+      member: MemberData
+    ): Promise<{ slotId: string; sessionId: string; connectionId: number } | null> {
+      const candidates: string[] = [member.slotId];
+      for (const [, slot] of await this.getAllSlots()) {
+        if (slot.slotId !== member.slotId && slot.members.length < this.config.usersPerSession) {
+          candidates.push(slot.slotId);
+        }
+      }
+
+      for (const slotId of candidates) {
+        const minted = await this.mintConnectionOnSlot(connId, slotId);
+        if (minted) {
+          await this.assignMemberToSlot(connId, member.slotId, slotId);
+          return { slotId, ...minted };
+        }
+      }
+
+      // No existing session could take the member — open a new slot if under the cap.
+      if ((await this.getSlotCount()) < this.config.maxSessions) {
+        const newSlot: SlotRecord = {
+          slotId: this.genId(),
+          sessionId: null,
+          members: [],
+          createdAt: Date.now(),
+        };
+        await this.setSlot(newSlot);
+        const minted = await this.mintConnectionOnSlot(connId, newSlot.slotId);
+        if (minted) {
+          await this.assignMemberToSlot(connId, member.slotId, newSlot.slotId);
+          return { slotId: newSlot.slotId, ...minted };
+        }
+        // The fresh slot couldn't take a connection either — drop it + its session.
+        await this.dropSlot(newSlot.slotId, "server", { notify: false });
+      }
+
+      return null;
+    }
+
+    /**
+     * Ensure the slot has a Reactor session (creating one if needed) and mint a
+     * WebRTC connection under it, retrying transient failures. Returns the
+     * session + connection id on success, or null if the session is at its
+     * connection cap, if creation failed, or if the slot vanished — the caller
+     * spills to the next candidate. Writes re-read after each network await (the
+     * input gate is open across them) so a concurrent handler isn't clobbered.
+     */
+    private async mintConnectionOnSlot(
+      connId: string,
+      slotId: string
+    ): Promise<{ sessionId: string; connectionId: number } | null> {
+      const slot = await this.getSlot(slotId);
+      if (!slot) return null;
+
+      let sessionId = slot.sessionId;
+      if (!sessionId) {
+        try {
+          sessionId = await this.runAcquire(this.config.model);
+        } catch (err) {
+          this.reportError("session_create_failed", err, { connId });
+          return null;
+        }
+        const fresh = await this.getSlot(slotId);
+        if (!fresh) return null;
+        await this.setSlot({ ...fresh, sessionId });
+        this.config.hooks.onSessionCreated?.(sessionId);
+        this.log("info", "session_created", "Created a new Reactor session", { connId, sessionId });
+      }
+
+      for (let attempt = 1; attempt <= CONNECTION_MINT_ATTEMPTS; attempt++) {
+        try {
+          const connectionId = await this.api.createConnection(sessionId);
+          return { sessionId, connectionId };
+        } catch (err) {
+          if (err instanceof CoordinatorError && err.status === 429) {
+            this.log("info", "connection_cap_reached", "Session at its connection cap; spilling", {
+              connId,
+              sessionId,
+            });
+            return null;
+          }
+          if (attempt === CONNECTION_MINT_ATTEMPTS) {
+            this.reportError("connection_mint_failed", err, { connId, sessionId });
+            return null;
+          }
+          await this.sleep(CONNECTION_MINT_RETRY_MS);
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Move a member's slot membership from `fromSlotId` to `toSlotId` (no-op when
+     * they are the same). The member is removed from the source first; if that
+     * empties the source, its session is released and the slot dropped, so a
+     * session created for a member who then spilled elsewhere never lingers.
+     */
+    private async assignMemberToSlot(
+      connId: string,
+      fromSlotId: string,
+      toSlotId: string
+    ): Promise<void> {
+      if (fromSlotId === toSlotId) return;
+
+      const to = await this.getSlot(toSlotId);
+      if (to && !to.members.includes(connId)) {
+        await this.setSlot({ ...to, members: [...to.members, connId] });
+      }
+
+      const from = await this.getSlot(fromSlotId);
+      if (!from) return;
+      const remaining = from.members.filter((id) => id !== connId);
+      if (remaining.length > 0) {
+        await this.setSlot({ ...from, members: remaining });
+        return;
+      }
+
+      // Source emptied by the move: release its session (if any) and drop it.
+      if (from.sessionId) {
+        await this.runRelease({
+          sessionId: from.sessionId,
+          userId: connId,
+          reason: "server",
+          lastMember: true,
+        });
+        this.config.hooks.onSessionClosed?.(from.sessionId, "server");
+      }
+      // Re-read after the network release before deleting (gate was open).
+      const recheck = await this.getSlot(fromSlotId);
+      if (recheck && recheck.members.filter((id) => id !== connId).length === 0) {
+        await this.deleteSlot(fromSlotId);
+        this.scheduleAdminBroadcast();
+      }
+    }
+
+    private sleep(ms: number): Promise<void> {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     private async mintAndSend(conn: Party.Connection): Promise<void> {

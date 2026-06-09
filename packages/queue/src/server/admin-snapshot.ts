@@ -9,6 +9,7 @@ import type { ResolvedConfig } from "./config";
 
 interface MemberData {
   sessionId: string | null;
+  connectionId: number | null;
   expiresAt: number;
   claimed: boolean;
 }
@@ -78,6 +79,7 @@ export function buildAdminSnapshot(opts: {
       members.push({
         connId,
         sessionId: data.sessionId,
+        connectionId: data.connectionId,
         clientId: await opts.resolveClientId(connId),
         claimed: data.claimed,
         expiresAt: data.expiresAt,
