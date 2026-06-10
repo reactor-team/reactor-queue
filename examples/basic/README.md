@@ -7,8 +7,8 @@ Next.js app plus one PartyKit room.
 It walks through every queue phase — line position, the "you're up" admission
 countdown, the live session with a time-left clock, expiry, and a rejoin prompt —
 and shows the two integration points: `getJwt={queue.getJwt}` and
-`connectOptions={{ sessionId: queue.sessionId }}`, so the SDK attaches to the
-server-created session.
+`connectOptions={{ sessionId: queue.sessionId, connectionId: queue.connectionId }}`,
+so the SDK attaches to the server-created session and connection.
 
 As soon as the session is ready, the page auto-sends one prompt (the glowing words
 "REACTOR QUEUE") and starts generating, so you get live video right away. Adding a
@@ -17,8 +17,8 @@ the base `Reactor`) and your existing controls work as-is.
 
 ## Run it
 
-The example uses the published `@reactor-team/js-sdk` (2.11.2+), where
-`connectOptions.sessionId` — the API the queue attaches with — shipped.
+The example uses the published `@reactor-team/js-sdk` (2.12.0+), where
+`connectOptions.connectionId` — the API the queue attaches with — shipped.
 
 From the **repo root** (build the workspace packages first):
 

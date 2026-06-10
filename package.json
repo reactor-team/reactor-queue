@@ -12,6 +12,8 @@
     "build": "pnpm -r --filter \"./packages/*\" build",
     "dev": "pnpm -r --parallel --filter \"./packages/*\" dev",
     "typecheck": "pnpm -r --filter \"./packages/*\" typecheck",
+    "test": "pnpm -r --filter \"./packages/*\" test",
+    "test:coverage": "pnpm -r --filter \"./packages/*\" test:coverage",
     "clean": "pnpm -r exec rm -rf dist .turbo",
     "example": "pnpm --filter @reactor-team/queue-example-basic dev",
     "format": "prettier --write .",

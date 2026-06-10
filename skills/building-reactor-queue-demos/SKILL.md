@@ -36,7 +36,7 @@ need. Don't wire admin mode or lifecycle overrides "just in case."
 | Log/measure admissions, sessions, errors                                                                                                   | High-level + **hooks**            | `hooks: { onUserEnteredSession, onSessionClosed, … }`                                                              |
 | An operator dashboard (watch line, kick users, force-close)                                                                                | **Advanced: admin mode**          | `RQ_ADMIN_PASSWORD` + `ReactorQueueAdminProvider` / `useReactorQueueAdmin`                                         |
 | Sessions come from **another service**, not `POST /sessions` (pre-provisioned pool, or a session that already has another client attached) | **Advanced: lifecycle overrides** | `acquireSession` / `releaseSession`                                                                                |
-| >1 user sharing one Reactor session                                                                                                        | **Advanced (gated on platform)**  | `usersPerSession` (queue-side ready; needs platform multi-connection)                                              |
+| >1 user sharing one Reactor session                                                                                                        | **Advanced: multi-connection**    | `usersPerSession` (server mints a connection per member; platform caps `connections_per_session` at 4 by default)  |
 | Tens of thousands of concurrent waiters                                                                                                    | **Operational**                   | hibernation is already on; understand the single-room ceiling                                                      |
 
 If your task is "put a queue in front of model X", you are in the High-level row.
@@ -47,10 +47,10 @@ Stop there.
 ```
 Browser (your app)                   PartyKit room (you deploy)            Reactor Coordinator
 @reactor-team/queue                  @reactor-team/queue/server            api.reactor.inc
-  • partysocket (ws)  ───────────▶     • FIFO queue + capacity gate   ──────▶  POST /sessions   (on claim)
-  • getJwt() resolver  ◀── token ──    • mints JWTs                           POST /tokens
-  • sessionId on session_ready         • per-member timers (alarm)            GET/DELETE /sessions/{id}
-        │ getJwt + sessionId
+  • partysocket (ws)  ───────────▶     • FIFO queue + capacity gate   ──────▶  POST /sessions       (on claim)
+  • getJwt() resolver  ◀── token ──    • mints JWTs + connections             POST .../connections (on claim)
+  • sessionId+connectionId             • per-member timers (alarm)            POST /tokens
+        │ getJwt + sessionId + connectionId                                   GET/DELETE /sessions/{id}
         ▼
 @reactor-team/js-sdk  ──────────── WebRTC ────────────────────────────────▶  GPU / model
 ```
@@ -61,14 +61,21 @@ The PartyKit room is the **single source of truth**:
    open slot before opening a new one, bounded by `maxSessions × usersPerSession`.
    At admission **no Reactor session exists yet.**
 2. When the user **`claim()`s**, the server obtains a session id (default:
-   `POST /sessions`), and sends `session_ready { sessionId }`. The client attaches
-   with `connect(jwt, { sessionId })`. Creating on claim — not on admission —
-   means an abandoned grace window never orphans a GPU session.
+   `POST /sessions`) **and mints a WebRTC connection under it**
+   (`POST .../connections`), then sends `session_ready { sessionId, connectionId }`.
+   The client attaches with `connect(jwt, { sessionId, connectionId })`. Creating
+   on claim — not on admission — means an abandoned grace window never orphans a
+   GPU session. The mint is the real capacity test: a 429 (session at its
+   `connections_per_session` cap) makes the queue spill the member to another or
+   new session.
 3. **Mints short-lived JWTs** only for admitted members (the `getJwt` resolver).
 4. **Bounded turns** (default 120s after claim). On the last member leaving, the
-   session is released (default: `DELETE /sessions/{id}`).
-5. Frees a member on `session_ended`, socket close, grace timeout, or a poll that
-   sees a terminal Reactor session state.
+   session is released (default: `DELETE /sessions/{id}`). The **server is the
+   sole stopper** — adopting clients never `DELETE`, so a tab closing leaves the
+   session alive for other members and the queue decides when it ends.
+5. Frees a member on `session_ended`, socket close, grace timeout, a poll that
+   sees a terminal Reactor session state, **or** a per-member liveness sweep that
+   releases a member whose PartyKit WS vanished without a clean `onClose`.
 
 **Slot vs session vs member** (the core nouns):
 
@@ -102,10 +109,19 @@ You never call these directly — the queue does:
   `{"expires_after": <seconds>}` → `{ jwt, expires_at }`. The API key is a
   **server secret**; the browser only ever sees minted JWTs.
 - **Session lifecycle**: with a queue the **server** owns the session and the SDK
-  **attaches** via `connect(jwt, { sessionId })`. States
+  **attaches** via `connect(jwt, { sessionId, connectionId })`. States
   `CREATED → PENDING → WAITING → ACTIVE → INACTIVE → CLOSED`. No webhook for end —
   the queue polls `GET /sessions/{id}/runtime` (`CLOSED`/`INACTIVE` = free).
-- **Stopping**: `DELETE /sessions/{id}`. The queue holds its own admin JWT for this.
+- **Connection minting**: `POST /sessions/{id}/transport/webrtc/connections` →
+  `{ connection_id }`, one per member, so the queue controls every connection.
+  The platform caps `connections_per_session` at **4 by default**; for
+  `usersPerSession > 4` raise that account quota or the mint 429s and the queue
+  spills to another session. A connection is reaped automatically when the
+  member's WebRTC disconnects (the model fires a per-connection disconnect).
+- **Stopping**: `DELETE /sessions/{id}`, the queue's job alone. Adopting clients
+  never `DELETE` (the SDK only deletes sessions it created itself), so the queue
+  is the single stopper. Keep `stopSessionsOnExpiry` on — there is no client-side
+  fallback. The queue holds its own admin JWT for this.
 
 ---
 
@@ -167,12 +183,12 @@ function Gate() {
   if (q.phase === "admitted") return <button onClick={q.claim}>Enter</button>;
   if (q.phase === "starting") return <p>Starting…</p>; // claimed, session being created
   if (q.phase === "expired") return <button onClick={q.rejoin}>Rejoin</button>;
-  if (q.phase !== "active" || !q.sessionId) return null;
+  if (q.phase !== "active" || !q.sessionId || !q.connectionId) return null;
   return (
     <ReactorProvider
       modelName="helios"
       getJwt={q.getJwt}
-      connectOptions={{ autoConnect: true, sessionId: q.sessionId }}
+      connectOptions={{ autoConnect: true, sessionId: q.sessionId, connectionId: q.connectionId }}
     >
       <SessionBridge />
       {/* your model UI */}
@@ -187,10 +203,11 @@ function SessionBridge() {
 }
 ```
 
-The whole integration is two lines: `getJwt={q.getJwt}` and
-`connectOptions.sessionId` (which arrives in `session_ready`, exposed as
-`q.sessionId` once `phase === "active"`). Requires `@reactor-team/js-sdk` with
-`ConnectOptions.sessionId`.
+The whole integration is `getJwt={q.getJwt}` plus `connectOptions.sessionId` and
+`connectOptions.connectionId` — both arrive in `session_ready`, exposed as
+`q.sessionId` / `q.connectionId` once `phase === "active"`. Pass **both**:
+omitting `sessionId` makes the SDK create+own+delete its own session, bypassing
+the queue. Requires `@reactor-team/js-sdk` **2.12.0+** (for `ConnectOptions.connectionId`).
 
 A complete runnable version is `examples/basic/app/page.tsx` (one page, base SDK,
 countdowns, its own PartyKit room). Use it as the reference.
@@ -218,8 +235,8 @@ Vanilla (no React): `new ReactorQueueClient({ host, autoConnect: true })`, then
 | `connecting` | socket opening                                            | spinner                       |
 | `queued`     | in line                                                   | "#{position} of {total}"      |
 | `admitted`   | capacity slot reserved, grace ticking. **No session yet** | "Enter" + grace countdown     |
-| `starting`   | claimed; server is creating the session                   | "Starting…" spinner           |
-| `active`     | `session_ready` received, `sessionId` set                 | the model + session countdown |
+| `starting`   | claimed; server is creating the session + connection      | "Starting…" spinner           |
+| `active`     | `session_ready`; `sessionId` + `connectionId` set         | the model + session countdown |
 | `expired`    | time up / reclaimed; session released                     | "Rejoin" prompt               |
 | `rejected`   | duplicate tab                                             | "open in one tab"             |
 
@@ -466,8 +483,9 @@ A non-queued app mints its own token and passes a resolver to the SDK:
 2. **Wrap the app** in `<ReactorQueueProvider host={...}>`, render `<ReactorProvider>`
    only once `phase === "active"`.
 3. **Swap the resolver**: `getJwt={fetchToken}` → `getJwt={queue.getJwt}`.
-4. **Attach, don't create**: `connectOptions={{ sessionId: queue.sessionId }}`;
-   `SessionBridge` calls `endSession()` on unmount.
+4. **Attach, don't create**: `connectOptions={{ sessionId: queue.sessionId, connectionId: queue.connectionId }}`;
+   `SessionBridge` calls `endSession()` on unmount. (Delete the old client-side
+   `DELETE /sessions` teardown — the queue is the sole stopper now.)
 
 The API key leaves the browser-facing app entirely, sessions become time-boxed,
 and access is gated by the line. The model UI is unchanged.
@@ -495,9 +513,11 @@ combo that triggers it spuriously).
 
 ### 4. The token is short-lived by design
 
-60s default; the client auto-refreshes and hands the last cached token to the SDK
-during teardown so cleanup `DELETE`s succeed. Don't raise `RQ_TOKEN_TTL_SECONDS`
-to "avoid refresh" — short tokens are the security model.
+60s default; the client auto-refreshes and keeps the last cached token through
+teardown so any in-flight SDK call still resolves one. (The adopting client never
+issues `DELETE /sessions` — the server stops the session — so the token isn't
+needed for teardown, just for clean shutdown of in-flight requests.) Don't raise
+`RQ_TOKEN_TTL_SECONDS` to "avoid refresh" — short tokens are the security model.
 
 ### 5. Reconnects change the connection id
 
@@ -529,3 +549,5 @@ reconciles state.
 - `README.md` — full library reference and architecture.
 - `examples/basic` — runnable demo (`app/page.tsx`) + admin dashboard
   (`app/admin/page.tsx`) + its PartyKit room (`partykit/server.ts`).
+- `deploy-partykit` skill — when the demo's ready, deploy its PartyKit room to
+  Cloudflare (cloud-prem).

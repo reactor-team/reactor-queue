@@ -40,8 +40,10 @@ export interface QueueState {
   sessionDurationMs: number | null;
   /** Seconds left as of the last `time_warning`, else null. */
   secondsLeft: number | null;
-  /** Reactor session id from the server (set on `admitted`). */
+  /** Reactor session id from the server (set on `session_ready`). */
   sessionId: string | null;
+  /** Server-minted WebRTC connection id (set on `session_ready`); pass with sessionId. */
+  connectionId: number | null;
   /** Reason for the most recent rejection/expiry/error, if any. */
   reason: string | null;
 }
@@ -58,6 +60,7 @@ export const INITIAL_STATE: QueueState = {
   sessionDurationMs: null,
   secondsLeft: null,
   sessionId: null,
+  connectionId: null,
   reason: null,
 };
 

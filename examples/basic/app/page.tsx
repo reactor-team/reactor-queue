@@ -118,7 +118,9 @@ function Gate() {
       );
 
     case "active":
-      return q.sessionId ? <Session sessionId={q.sessionId} onLeave={leave} /> : null;
+      return q.sessionId && q.connectionId ? (
+        <Session sessionId={q.sessionId} connectionId={q.connectionId} onLeave={leave} />
+      ) : null;
 
     case "expired":
       return (
@@ -157,12 +159,21 @@ function Gate() {
 }
 
 // ── The gated session ─────────────────────────────────────────────────────
-function Session({ sessionId, onLeave }: { sessionId: string; onLeave: () => void }) {
+function Session({
+  sessionId,
+  connectionId,
+  onLeave,
+}: {
+  sessionId: string;
+  connectionId: number;
+  onLeave: () => void;
+}) {
   const { getJwt, sessionEndsAt } = useReactorQueue();
   return (
     // getJwt is referentially stable — pass it directly, don't wrap in an arrow.
-    // sessionId comes from the queue server (POST /sessions on admit).
-    <HeliosProvider getJwt={getJwt} connectOptions={{ autoConnect: true, sessionId }}>
+    // sessionId + connectionId both come from the queue server (it creates the
+    // session and mints the connection); the client only adopts, never creates.
+    <HeliosProvider getJwt={getJwt} connectOptions={{ autoConnect: true, sessionId, connectionId }}>
       <SessionBridge />
       <AutoPrompt />
       <div style={s.stage}>

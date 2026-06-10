@@ -8,7 +8,7 @@
  */
 
 /** Current protocol version. Bumped only on breaking wire changes. */
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 
 /** Default PartyKit room id. A single room is the source of truth for one queue. */
 export const DEFAULT_ROOM = "reactor-queue";
@@ -83,12 +83,20 @@ export interface AdmittedMessage {
 
 /**
  * Sent after `claim()`: the server has created (or reused) the Reactor session
- * for this member. Attach with `connect({ sessionId })`.
+ * and minted a WebRTC connection under it for this member. Attach with
+ * `connect({ sessionId, connectionId })` — the server owns both, so the client
+ * never creates or stops anything.
  */
 export interface SessionReadyMessage {
   type: "session_ready";
-  /** Reactor session id created by the server — attach with connect({ sessionId }). */
+  /** Reactor session id created by the server — pass to connect({ sessionId }). */
   sessionId: string;
+  /**
+   * Server-minted WebRTC connection id for this member — pass to
+   * connect({ connectionId }). The server registered it under `sessionId`, so
+   * the client adopts it instead of registering its own.
+   */
+  connectionId: number;
   /** Full session budget (ms). */
   sessionDurationMs: number;
   /** Unix epoch ms when the session ends. */
@@ -202,6 +210,8 @@ export interface AdminMemberSnapshot {
   connId: string;
   /** Reactor session id once claimed; null while still in grace (no session yet). */
   sessionId: string | null;
+  /** Server-minted WebRTC connection id once claimed; null while still in grace. */
+  connectionId: number | null;
   clientId: string | null;
   claimed: boolean;
   expiresAt: number;

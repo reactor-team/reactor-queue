@@ -13,19 +13,19 @@
   },
   "dependencies": {
     "@reactor-models/helios": "^0.9.5",
-    "@reactor-team/js-sdk": "2.11.2",
+    "@reactor-team/js-sdk": "2.12.0",
     "@reactor-team/queue": "workspace:*",
     "hls.js": "^1.6.0",
-    "next": "^15.5.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "next": "^16.2.7",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "zustand": "^5.0.6"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/react": "^19.0.0",
+    "@types/node": "^25.9.2",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.0.0",
-    "concurrently": "^9.1.0",
+    "concurrently": "^10.0.3",
     "partykit": "^0.0.115",
     "typescript": "^6.0.3"
   }
