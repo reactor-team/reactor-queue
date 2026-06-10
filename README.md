@@ -727,10 +727,10 @@ packaging — build a tarball and install that:
 
 ```bash
 # in the reactor-queue checkout
-pnpm --filter @reactor-team/queue pack   # → reactor-team-queue-0.0.1.tgz
+pnpm --filter @reactor-team/queue pack   # → reactor-team-queue-0.0.2.tgz
 
 # in your app
-pnpm add ../reactor-queue/packages/queue/reactor-team-queue-0.0.1.tgz
+pnpm add ../reactor-queue/packages/queue/reactor-team-queue-0.0.2.tgz
 ```
 
 `pnpm pack` runs the same `prepack`/`postpack` as publishing, so the tarball
