@@ -22,6 +22,31 @@ function connected(overrides = {}) {
   return { client, socket: lastSocket() };
 }
 
+// Swap the global `localStorage` for the duration of `fn`, restoring whatever
+// was there before (the test setup installs a functional in-memory Storage).
+function withLocalStorage<T>(replacement: unknown, fn: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    value: replacement,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return fn();
+  } finally {
+    if (original) {
+      Object.defineProperty(globalThis, "localStorage", original);
+    } else {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  }
+}
+
+function generatedClientId(): string {
+  new ReactorQueueClient({ host: "queue.test", autoConnect: true });
+  return (lastSocket().options.query as Record<string, string>).rqClientId;
+}
+
 describe("connection + identity", () => {
   it("starts idle and only opens a socket on connect", () => {
     const client = new ReactorQueueClient({ host: "queue.test" });
@@ -39,6 +64,28 @@ describe("connection + identity", () => {
     new ReactorQueueClient({ host: "queue.test", autoConnect: true });
     const idB = (lastSocket().options.query as Record<string, string>).rqClientId;
     expect(idA).toBe(idB);
+  });
+
+  // Regression for the Node 24+ SSR crash: `localStorage` is present but
+  // non-functional (its methods are missing without --localstorage-file), and
+  // also covers storage that throws on access (Safari private mode). The client
+  // must fall back to a generated id instead of throwing in the constructor.
+  it("falls back to a generated id when localStorage methods are missing", () => {
+    const id = withLocalStorage({}, generatedClientId);
+    expect(id).toMatch(/\S/);
+  });
+
+  it("falls back to a generated id when localStorage access throws", () => {
+    const hostile = {
+      getItem() {
+        throw new Error("storage disabled");
+      },
+      setItem() {
+        throw new Error("storage disabled");
+      },
+    };
+    const id = withLocalStorage(hostile, generatedClientId);
+    expect(id).toMatch(/\S/);
   });
 });
 
