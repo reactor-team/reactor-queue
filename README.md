@@ -653,90 +653,6 @@ This is a pnpm workspace; the example consumes the package via `workspace:*`. Th
 fastest way to try a change is `pnpm dev` (watch build) in one terminal and
 `pnpm example` in another.
 
-## Using the library locally (without npm)
-
-To test an unreleased change against your own app, point your project at a local
-checkout. Clone this repo next to your app and build the package first (its
-`package.json` `main`/`types` point at `dist/`, so an unbuilt checkout resolves to
-nothing):
-
-```bash
-git clone https://github.com/reactor-team/reactor-queue
-cd reactor-queue
-pnpm install
-pnpm build       # or `pnpm dev` to rebuild on every change (see below)
-```
-
-Then wire your app to that checkout with one of the approaches below.
-
-### Recommended: a pnpm `link:` override
-
-In **your app's** `package.json`, override the package to your local directory.
-pnpm resolves it for the PartyKit project too, so both halves point at your
-checkout:
-
-```jsonc
-{
-  "dependencies": {
-    "@reactor-team/queue": "*",
-  },
-  "pnpm": {
-    "overrides": {
-      "@reactor-team/queue": "link:../reactor-queue/packages/queue",
-    },
-  },
-}
-```
-
-```bash
-pnpm install   # in your app — now imports resolve to the local checkout
-```
-
-The one dependency covers both halves: the web app imports
-`@reactor-team/queue/react`, the PartyKit project imports `@reactor-team/queue/server`.
-Adjust the relative path to wherever you cloned it.
-
-### Live edits while you develop
-
-Run the watcher in the queue checkout so edits rebuild `dist/` automatically:
-
-```bash
-pnpm dev   # in the reactor-queue checkout: watch-build the package
-```
-
-With the `link:` override, your app picks up each rebuild on the next reload
-(restart `partykit dev` / your dev server if it caches modules) — no re-`install`
-or re-link per change.
-
-### Alternative: `pnpm link --global`
-
-To avoid touching your app's `package.json`, link globally from the checkout:
-
-```bash
-# in the reactor-queue checkout (after pnpm build)
-pnpm --filter @reactor-team/queue link --global
-
-# in your app
-pnpm link --global @reactor-team/queue
-```
-
-### Verifying the real published artifact
-
-To test exactly what npm consumers get — including the `files`/`prepack`
-packaging — build a tarball and install that:
-
-```bash
-# in the reactor-queue checkout
-pnpm --filter @reactor-team/queue pack   # → reactor-team-queue-0.0.2.tgz
-
-# in your app
-pnpm add ../reactor-queue/packages/queue/reactor-team-queue-0.0.2.tgz
-```
-
-`pnpm pack` runs the same `prepack`/`postpack` as publishing, so the tarball
-contains `dist/`, `README.md`, `LICENSE`, and `NOTICE` — a faithful preview of the
-published package.
-
 ## Hibernation (production scaling)
 
 The PartyKit server opts into [Hibernation](https://docs.partykit.io/guides/scaling-partykit-servers-with-hibernation/)
@@ -767,14 +683,11 @@ instance.
 
 ## Milestones
 
-Where this library is headed. Checked boxes are shipped; the first unchecked box is
-next. The rest is roughly ordered intent, not a commitment.
+Shipped so far:
 
 - [x] Server-owned sessions (queue creates/stops the Reactor session)
 - [x] Hibernation-ready storage model for production-scale rooms
 - [x] Admin dashboard (watch the room, kick members, close sessions)
-- [ ] **Distributing on npmjs** — publish `@reactor-team/queue` to the public
-      registry so consumers install it directly instead of from source.
 
 ## License
 
