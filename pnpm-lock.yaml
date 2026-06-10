@@ -18,8 +18,8 @@ importers:
   examples/basic:
     dependencies:
       '@reactor-models/helios':
-        specifier: ^0.9.5
-        version: 0.9.5(hls.js@1.6.16)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))
+        specifier: ^0.9.7
+        version: 0.9.7(hls.js@1.6.16)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))
       '@reactor-team/js-sdk':
         specifier: 2.12.0
         version: 2.12.0(hls.js@1.6.16)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))
@@ -696,8 +696,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@napi-rs/wasm-runtime@1.1.4':
-    resolution: {integrity: sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow==}
+  '@napi-rs/wasm-runtime@1.1.5':
+    resolution: {integrity: sha512-AWPoBRJ9tsnVhor4sjO7rkni+7p+2IAEFj6cx06UgP10jkQHqay/36uRV/bFkgrh18D9vb4cr8Q0Pthskgzy+Q==}
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
@@ -756,8 +756,8 @@ packages:
   '@oxc-project/types@0.133.0':
     resolution: {integrity: sha512-KzkdCd6Uxqnf6l3HOw1xfatAlUURA0g14cvBYFyJ5SaNOQbOUvBr9PKArcPcrNIeRsBdgcUzOGrhKveVpvOIGA==}
 
-  '@reactor-models/helios@0.9.5':
-    resolution: {integrity: sha512-5+n04Q83ERhTYEZFE7yLpvn+wfgfNZ44MOBzmy/SKZaySjxQsVIsM8j7KylnEYp6NspFXaed+Xmrjic++XbVog==}
+  '@reactor-models/helios@0.9.7':
+    resolution: {integrity: sha512-4m8Hbp8HA51Yyltb06dFtXA0qXZruA82Gz4fKK5WqwXnN+VvTTCEJlgY09f46laPUyjQzkL/BqiX76gN80nFew==}
     peerDependencies:
       react: '>=18'
 
@@ -2458,7 +2458,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@napi-rs/wasm-runtime@1.1.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
+  '@napi-rs/wasm-runtime@1.1.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
     dependencies:
       '@emnapi/core': 1.10.0
       '@emnapi/runtime': 1.10.0
@@ -2493,7 +2493,7 @@ snapshots:
 
   '@oxc-project/types@0.133.0': {}
 
-  '@reactor-models/helios@0.9.5(hls.js@1.6.16)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))':
+  '@reactor-models/helios@0.9.7(hls.js@1.6.16)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))':
     dependencies:
       '@reactor-team/js-sdk': 2.12.0(hls.js@1.6.16)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))
       react: 19.2.7
@@ -2555,7 +2555,7 @@ snapshots:
     dependencies:
       '@emnapi/core': 1.10.0
       '@emnapi/runtime': 1.10.0
-      '@napi-rs/wasm-runtime': 1.1.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
+      '@napi-rs/wasm-runtime': 1.1.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
     optional: true
 
   '@rolldown/binding-win32-arm64-msvc@1.0.3':
