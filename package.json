@@ -2,7 +2,7 @@
   "name": "reactor-queue",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@10.17.0",
+  "packageManager": "pnpm@10.28.1",
   "description": "Drop-in waiting-room / queue gating for Reactor demos. PartyKit server + JS/React client that mints short-lived Reactor JWTs only to admitted users.",
   "license": "Apache-2.0",
   "engines": {

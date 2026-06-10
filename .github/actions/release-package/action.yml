@@ -1,0 +1,77 @@
+# Publish one workspace package to npm via OIDC trusted publishing and cut a
+# namespaced release, but only when its package.json version has no matching
+# tag yet. The package version is the single source of truth: a version with
+# an existing `<namespace>/v<version>` tag is considered already released and
+# the action is a no-op, which makes it safe to run on every push to main.
+#
+# Assumes the caller has already checked out the repo (with tags), set up pnpm
+# + Node with the npm registry, and run `pnpm install`.
+
+name: "Release package"
+description: "Publish a workspace package to npm via OIDC and tag it when its version is new."
+
+inputs:
+  package-dir:
+    description: "Path to the package, relative to the repo root (e.g. packages/queue)."
+    required: true
+  tag-namespace:
+    description: "Release-tag namespace; the tag is <tag-namespace>/v<version> (e.g. queue)."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve version and check for an existing release
+      id: meta
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="${{ inputs.package-dir }}"
+        name=$(node -p "require('./${dir}/package.json').name")
+        version=$(node -p "require('./${dir}/package.json').version")
+        tag="${{ inputs.tag-namespace }}/v${version}"
+
+        {
+          echo "name=$name"
+          echo "version=$version"
+          echo "tag=$tag"
+        } >>"$GITHUB_OUTPUT"
+
+        if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+          echo "release=false" >>"$GITHUB_OUTPUT"
+          echo "::notice title=Release skipped::${name}@${version} already released (tag ${tag} exists)."
+        else
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "::notice title=Release pending::${name}@${version} is new — publishing and tagging ${tag}."
+        fi
+
+    - name: Build
+      if: steps.meta.outputs.release == 'true'
+      shell: bash
+      run: pnpm build
+
+    - name: Publish to npm (OIDC trusted publishing)
+      if: steps.meta.outputs.release == 'true'
+      shell: bash
+      env:
+        # Provenance attestations are generated from the GitHub OIDC identity;
+        # no NPM_TOKEN is involved.
+        NPM_CONFIG_PROVENANCE: "true"
+      run: |
+        set -euo pipefail
+        # pnpm rewrites any internal `workspace:*` dependency to the concrete
+        # published version and runs prepack (bundling LICENSE + NOTICE).
+        # --no-git-checks: the runner is on a detached HEAD at the release SHA.
+        pnpm --filter "${{ steps.meta.outputs.name }}" publish --no-git-checks
+
+    - name: Create release tag
+      if: steps.meta.outputs.release == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        gh release create "${{ steps.meta.outputs.tag }}" \
+          --target "$GITHUB_SHA" \
+          --title "${{ steps.meta.outputs.name }} v${{ steps.meta.outputs.version }}" \
+          --notes "Automated release of \`${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }}\`, published to npm via trusted publishing."
