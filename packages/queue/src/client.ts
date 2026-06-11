@@ -11,15 +11,30 @@ import { INITIAL_STATE, type QueueState, type ReactorQueueClientOptions } from "
 const CLIENT_ID_STORAGE_KEY = "reactor-queue:client-id";
 
 function persistentClientId(): string {
-  if (typeof localStorage === "undefined") {
+  // Feature-detect rather than just checking `typeof localStorage`. Node 25
+  // unflagged Web Storage and, without `--localstorage-file`, exposes a
+  // `localStorage` global whose methods are all undefined, so an SSR render
+  // under modern Node hits "localStorage.getItem is not a function". Node 26
+  // goes further and throws a DOMException on any access to the global, which
+  // is why the try/catch wraps even the `typeof` checks. It also covers Safari
+  // private mode (setItem throws) and disabled storage.
+  try {
+    if (
+      typeof localStorage === "undefined" ||
+      typeof localStorage.getItem !== "function" ||
+      typeof localStorage.setItem !== "function"
+    ) {
+      return cryptoRandomId();
+    }
+    let id = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (!id) {
+      id = cryptoRandomId();
+      localStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
+    }
+    return id;
+  } catch {
     return cryptoRandomId();
   }
-  let id = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-  if (!id) {
-    id = cryptoRandomId();
-    localStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
-  }
-  return id;
 }
 
 function cryptoRandomId(): string {
