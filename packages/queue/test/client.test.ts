@@ -66,10 +66,11 @@ describe("connection + identity", () => {
     expect(idA).toBe(idB);
   });
 
-  // Regression for the Node 24+ SSR crash: `localStorage` is present but
+  // Regression for the Node 25+ SSR crash: `localStorage` is present but
   // non-functional (its methods are missing without --localstorage-file), and
-  // also covers storage that throws on access (Safari private mode). The client
-  // must fall back to a generated id instead of throwing in the constructor.
+  // also covers storage that throws on access (Node 26, Safari private mode).
+  // The client must fall back to a generated id instead of throwing in the
+  // constructor.
   it("falls back to a generated id when localStorage methods are missing", () => {
     const id = withLocalStorage({}, generatedClientId);
     expect(id).toMatch(/\S/);

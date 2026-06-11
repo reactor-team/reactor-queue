@@ -11,11 +11,13 @@ import { INITIAL_STATE, type QueueState, type ReactorQueueClientOptions } from "
 const CLIENT_ID_STORAGE_KEY = "reactor-queue:client-id";
 
 function persistentClientId(): string {
-  // Feature-detect rather than just checking `typeof localStorage`. Node 24+
-  // exposes a `localStorage` global that is non-functional without
-  // `--localstorage-file` (its methods are missing), so an SSR render under
-  // modern Node hits "localStorage.getItem is not a function". The try/catch
-  // also covers Safari private mode (setItem throws) and disabled storage.
+  // Feature-detect rather than just checking `typeof localStorage`. Node 25
+  // unflagged Web Storage and, without `--localstorage-file`, exposes a
+  // `localStorage` global whose methods are all undefined, so an SSR render
+  // under modern Node hits "localStorage.getItem is not a function". Node 26
+  // goes further and throws a DOMException on any access to the global, which
+  // is why the try/catch wraps even the `typeof` checks. It also covers Safari
+  // private mode (setItem throws) and disabled storage.
   try {
     if (
       typeof localStorage === "undefined" ||
