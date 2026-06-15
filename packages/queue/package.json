@@ -95,7 +95,7 @@
     "react-dom": "^19.2.7",
     "tsup": "^8.3.5",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8",
+    "vitest": "^4.1.9",
     "zustand": "^5.0.2"
   }
 }
