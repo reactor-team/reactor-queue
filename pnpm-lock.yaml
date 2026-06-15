@@ -64,8 +64,8 @@ importers:
   packages/queue:
     dependencies:
       partysocket:
-        specifier: ^1.1.19
-        version: 1.1.19(react@19.2.7)
+        specifier: ^1.2.0
+        version: 1.2.0(react@19.2.7)
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.1
@@ -1581,8 +1581,8 @@ packages:
     resolution: {integrity: sha512-WHmJIZsAzRWrm1lrtU7wcl0tpD4rg2vgmn4+hXGPjU4mnXgFxyjVq2ZzO547xRXa1IbETOP6J9INl/ergR99bA==}
     hasBin: true
 
-  partysocket@1.1.19:
-    resolution: {integrity: sha512-hPwsXSdUc8PKNCinET6TD3JQOxzQ2JaP0bUZQXBVl6UM8UuLn1odgf1LcJXHy4UHSQwWL/RU3AnyhEsGM+W+sg==}
+  partysocket@1.2.0:
+    resolution: {integrity: sha512-xgXql4N0b3umN263lHkrZMvvtYC906h4YjY8l63LNcF0x1bfJmQtZLQGqNQWzFHAxLns/6h6/rjdLW4EdYqQwA==}
     peerDependencies:
       react: '>=17'
     peerDependenciesMeta:
@@ -3266,7 +3266,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  partysocket@1.1.19(react@19.2.7):
+  partysocket@1.2.0(react@19.2.7):
     dependencies:
       event-target-polyfill: 0.0.4
     optionalDependencies:
