@@ -27,6 +27,8 @@ export interface CoordinatorMock {
   failSessionsWith(status: number, body?: string): void;
   /** Force `POST .../connections` to fail with this status/body until reset. */
   failConnectionsWith(status: number, body?: string): void;
+  /** Fail only the next `n` `POST .../connections` calls, then succeed again. */
+  failNextConnections(n: number, status: number, body?: string): void;
   /** Force `POST /tokens` to fail with this status/body until reset. */
   failTokensWith(status: number, body?: string): void;
   /** State returned by `GET .../runtime` (default "ACTIVE"). */
@@ -72,6 +74,7 @@ export function installCoordinatorFetch(): CoordinatorMock {
     tokenSeq: 0,
     sessionFailure: null as Failure | null,
     connectionFailure: null as Failure | null,
+    connectionFailuresLeft: 0,
     tokenFailure: null as Failure | null,
   };
 
@@ -103,8 +106,15 @@ export function installCoordinatorFetch(): CoordinatorMock {
     }
 
     if (method === "POST" && url.endsWith("/connections")) {
-      if (state.connectionFailure)
-        return textResponse(state.connectionFailure.status, state.connectionFailure.body);
+      if (state.connectionFailure) {
+        const failure = state.connectionFailure;
+        // failuresLeft 0 means "fail forever"; a positive count burns down.
+        if (state.connectionFailuresLeft > 0) {
+          state.connectionFailuresLeft -= 1;
+          if (state.connectionFailuresLeft === 0) state.connectionFailure = null;
+        }
+        return textResponse(failure.status, failure.body);
+      }
       const id = state.nextConnectionId;
       state.nextConnectionId += 1;
       return jsonResponse(201, { connection_id: id });
@@ -135,7 +145,14 @@ export function installCoordinatorFetch(): CoordinatorMock {
     callsTo: (fragment) => state.calls.filter((c) => c.url.includes(fragment)),
     countTo: (fragment) => state.calls.filter((c) => c.url.includes(fragment)).length,
     failSessionsWith: (status, b = "") => (state.sessionFailure = { status, body: b }),
-    failConnectionsWith: (status, b = "") => (state.connectionFailure = { status, body: b }),
+    failConnectionsWith: (status, b = "") => {
+      state.connectionFailure = { status, body: b };
+      state.connectionFailuresLeft = 0;
+    },
+    failNextConnections: (n, status, b = "") => {
+      state.connectionFailure = { status, body: b };
+      state.connectionFailuresLeft = n;
+    },
     failTokensWith: (status, b = "") => (state.tokenFailure = { status, body: b }),
     get runtimeState() {
       return state.runtimeState;
