@@ -1,6 +1,6 @@
 {
   "name": "@reactor-team/queue",
-  "version": "0.1.0",
+  "version": "0.0.4",
   "description": "Drop-in waiting room for Reactor demos: a browser client (framework-agnostic + React) and a PartyKit server that gate access to a capacity-limited app and admit waiting users in order.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/reactor-team/reactor-queue#readme",
