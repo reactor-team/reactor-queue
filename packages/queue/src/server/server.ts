@@ -73,6 +73,18 @@ interface SlotRecord {
   members: string[];
   createdAt: number;
   lastPollAt?: number;
+  /**
+   * The slot's session-scoped JWT: minted once per slot, used to create the
+   * slot's session (binding the session to the token's grant), and handed to
+   * every member seated here — it is the only token the Coordinator lets act
+   * on this session besides same-user unscoped ones. Never re-minted: a fresh
+   * scoped token would have an empty grant and could not attach. Absent on
+   * slots created before scoped tokens existed and when `acquireSession`
+   * sources sessions externally; those slots fall back to unscoped tokens.
+   */
+  jwt?: string | null;
+  /** Unix seconds when `jwt` expires (from the mint response). */
+  jwtExpiresAt?: number | null;
 }
 
 /** Maps a stable browser id → its current connection, for duplicate-tab eviction. */
@@ -135,6 +147,55 @@ export function createReactorQueueServer(
     private async runAcquire(model: string): Promise<string> {
       if (this.config.acquireSession) return this.config.acquireSession({ model });
       return this.api.createSession({ model, webrtcVersion: this.config.webrtcVersion });
+    }
+
+    /**
+     * Whether members get session-scoped tokens (the default). Requires the
+     * default session source: an `acquireSession` override creates sessions
+     * under a grant this server does not hold, which a scoped token could
+     * never attach to — so those deployments keep unscoped member tokens.
+     */
+    private get scopedTokens(): boolean {
+      return !this.config.acquireSession;
+    }
+
+    /**
+     * TTL for a slot's scoped token. The token is the session bond and cannot
+     * be refreshed (a re-mint starts a new, empty grant), so it must outlive
+     * the slot: admission grace + the full session budget + a margin. The
+     * configured `tokenTtlSeconds` still acts as a floor.
+     */
+    private slotTokenTtlSeconds(): number {
+      const coverMs = this.config.admissionGraceMs + this.config.sessionDurationMs;
+      return Math.max(this.config.tokenTtlSeconds, Math.ceil(coverMs / 1000) + 120);
+    }
+
+    /**
+     * The slot's scoped token, minted and persisted on first use. Returns null
+     * when the slot vanished mid-mint, or for a legacy slot whose session
+     * already exists without a stored grant (created before scoped tokens):
+     * that session only accepts unscoped same-user tokens, so callers fall
+     * back to the unscoped mint.
+     */
+    private async ensureSlotToken(
+      slotId: string
+    ): Promise<{ jwt: string; expiresAt: number } | null> {
+      const slot = await this.getSlot(slotId);
+      if (!slot) return null;
+      if (slot.jwt) return { jwt: slot.jwt, expiresAt: slot.jwtExpiresAt ?? 0 };
+      if (slot.sessionId) return null;
+
+      const minted = await this.api.mintToken(this.slotTokenTtlSeconds(), {
+        model: this.config.model,
+        maxSessions: 1,
+      });
+      // Re-read before persisting: the mint is a network call and the input
+      // gate was open, so the slot may have been mutated or deleted.
+      const fresh = await this.getSlot(slotId);
+      if (!fresh) return null;
+      if (fresh.jwt) return { jwt: fresh.jwt, expiresAt: fresh.jwtExpiresAt ?? 0 };
+      await this.setSlot({ ...fresh, jwt: minted.jwt, jwtExpiresAt: minted.expiresAt });
+      return minted;
     }
 
     /**
@@ -764,7 +825,7 @@ export function createReactorQueueServer(
 
           case "request_token": {
             const member = await this.getMember(sender.id);
-            if (member) await this.mintAndSend(sender);
+            if (member) await this.sendMemberToken(sender);
             break;
           }
 
@@ -969,10 +1030,12 @@ export function createReactorQueueServer(
               connId,
             }
           );
-          // Token can be minted now (it's not session-scoped); the SDK uses it
-          // after claim. getJwt/request_token keep it fresh.
+          // Hand the member their slot's token right away so the SDK has it
+          // before claim. In scoped mode this is the token that will create
+          // (and therefore own) the slot's session; if the claim spills them
+          // to a different slot, claimMember re-sends that slot's token.
           const conn = this.room.getConnection(connId);
-          if (conn) await this.mintAndSend(conn);
+          if (conn) await this.sendMemberToken(conn);
           admittedAny = true;
         }
       }
@@ -1020,6 +1083,23 @@ export function createReactorQueueServer(
         claimed: true,
         claiming: false,
       });
+
+      // The claim may have seated the member on a different slot than the one
+      // whose token they received at admission (spill / new slot). The attach
+      // token must be the one whose grant owns the session, so re-send the
+      // final slot's token before session_ready. Reads the stored token — no
+      // extra mint — and skips grant-less (legacy/override) sessions, whose
+      // members keep their unscoped admission token.
+      if (this.scopedTokens) {
+        const finalSlot = await this.getSlot(slotId);
+        if (finalSlot?.jwt) {
+          this.sendTo(connId, {
+            type: "token",
+            jwt: finalSlot.jwt,
+            expiresAt: finalSlot.jwtExpiresAt ?? 0,
+          });
+        }
+      }
 
       this.sendTo(connId, {
         type: "session_ready",
@@ -1103,9 +1183,24 @@ export function createReactorQueueServer(
       if (!slot) return null;
 
       let sessionId = slot.sessionId;
+      let slotJwt = slot.jwt ?? null;
       if (!sessionId) {
         try {
-          sessionId = await this.runAcquire(this.config.model);
+          if (this.scopedTokens) {
+            // Create the session *with the slot's scoped token* — this is the
+            // binding step: the Coordinator adds the session to that token's
+            // grant, making it the token members attach with.
+            const token = await this.ensureSlotToken(slotId);
+            if (!token) return null;
+            slotJwt = token.jwt;
+            sessionId = await this.api.createSession({
+              model: this.config.model,
+              webrtcVersion: this.config.webrtcVersion,
+              jwt: slotJwt,
+            });
+          } else {
+            sessionId = await this.runAcquire(this.config.model);
+          }
         } catch (err) {
           this.reportError("session_create_failed", err, { connId });
           return null;
@@ -1119,7 +1214,12 @@ export function createReactorQueueServer(
 
       for (let attempt = 1; attempt <= CONNECTION_MINT_ATTEMPTS; attempt++) {
         try {
-          const connectionId = await this.api.createConnection(sessionId);
+          // A session created by the slot token must also be operated with it;
+          // grant-less (legacy/override) sessions use the server JWT as before.
+          const connectionId = await this.api.createConnection(
+            sessionId,
+            slotJwt ? { jwt: slotJwt } : {}
+          );
           return { sessionId, connectionId };
         } catch (err) {
           if (err instanceof CoordinatorError && err.status === 429) {
@@ -1187,8 +1287,26 @@ export function createReactorQueueServer(
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
-    private async mintAndSend(conn: Party.Connection): Promise<void> {
+    /**
+     * Send a member the token their slot's session accepts. Scoped mode hands
+     * out the slot's own token (minting it on first use); a legacy slot with a
+     * grant-less session, and deployments with an `acquireSession` override,
+     * get the old unscoped mint instead.
+     */
+    private async sendMemberToken(conn: Party.Connection): Promise<void> {
       try {
+        if (this.scopedTokens) {
+          const member = await this.getMember(conn.id);
+          if (!member) return;
+          const token = await this.ensureSlotToken(member.slotId);
+          if (token) {
+            this.send(conn, { type: "token", jwt: token.jwt, expiresAt: token.expiresAt });
+            return;
+          }
+          const slot = await this.getSlot(member.slotId);
+          if (!slot) return;
+          // Legacy slot: fall through to the unscoped mint below.
+        }
         const { jwt, expiresAt } = await this.api.mintToken(this.config.tokenTtlSeconds);
         this.send(conn, { type: "token", jwt, expiresAt });
       } catch (err) {

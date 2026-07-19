@@ -49,6 +49,31 @@ describe("CoordinatorClient.mintToken", () => {
     expect(JSON.parse(init.body as string)).toEqual({ expires_after: 60 });
   });
 
+  it("carries session authorization_details when a scope is passed", async () => {
+    const { calls } = stubFetch([{ status: 200, body: { jwt: "scoped", expires_at: 500 } }]);
+    const res = await new CoordinatorClient(opts).mintToken(300, {
+      model: "reactor/helios",
+      maxSessions: 1,
+    });
+    expect(res).toEqual({ jwt: "scoped", expiresAt: 500 });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.expires_after).toBe(300);
+    expect(body.authorization_details).toEqual([
+      {
+        type: "session",
+        resources: { models: { match: ["reactor/helios"] } },
+        constraints: { max_sessions: 1 },
+      },
+    ]);
+  });
+
+  it("omits authorization_details without a scope", async () => {
+    const { calls } = stubFetch([{ status: 200, body: { jwt: "j", expires_at: 1 } }]);
+    await new CoordinatorClient(opts).mintToken(60);
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect("authorization_details" in body).toBe(false);
+  });
+
   it("falls back to a `token` field and derives expiresAt when absent", async () => {
     stubFetch([{ status: 200, body: { token: "legacy" } }]);
     const before = Math.floor(Date.now() / 1000);
@@ -152,6 +177,19 @@ describe("CoordinatorClient.createSession", () => {
     expect(body.supported_transports).toEqual([{ protocol: "webrtc", version: "1.0" }]);
   });
 
+  it("uses an explicit jwt without minting a server JWT", async () => {
+    const { calls } = stubFetch([{ status: 201, body: { session_id: "sess-9" } }]);
+    const id = await new CoordinatorClient(opts).createSession({
+      model: "helios",
+      webrtcVersion: "1.0",
+      jwt: "slot-jwt",
+    });
+    expect(id).toBe("sess-9");
+    expect(calls.some((c) => c.url.endsWith("/tokens"))).toBe(false);
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer slot-jwt");
+  });
+
   it("throws when the response has no session_id", async () => {
     stubFetch([
       { status: 200, body: { jwt: "j", expires_at: Math.floor(Date.now() / 1000) + 600 } },
@@ -187,6 +225,15 @@ describe("CoordinatorClient.createConnection", () => {
     const mint = calls.find((c) => c.url.endsWith("/connections"))!;
     expect(mint.url).toBe("https://coord.test/sessions/sess-1/transport/webrtc/connections");
     expect((mint.init.headers as Record<string, string>)["Reactor-WebRTC-Version"]).toBe("1.0");
+  });
+
+  it("uses an explicit jwt without minting a server JWT", async () => {
+    const { calls } = stubFetch([{ status: 201, body: { connection_id: 3 } }]);
+    const id = await new CoordinatorClient(opts).createConnection("sess-1", { jwt: "slot-jwt" });
+    expect(id).toBe(3);
+    expect(calls.some((c) => c.url.endsWith("/tokens"))).toBe(false);
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer slot-jwt");
   });
 
   it("raises a 429 CoordinatorError when the session is at its connection cap", async () => {
