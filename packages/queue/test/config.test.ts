@@ -35,6 +35,7 @@ describe("resolveConfig — defaults", () => {
     expect(c.coordinatorUrl).toBe("https://api.reactor.inc");
     expect(c.stopSessionsOnExpiry).toBe(true);
     expect(c.allowDuplicateConnections).toBe(false);
+    expect(c.startTimerOnSessionStart).toBe(false);
     expect(c.adminPassword).toBeNull();
     expect(c.allowedOrigins).toEqual([]);
     expect(c.acquireSession).toBeNull();
@@ -102,6 +103,18 @@ describe("resolveConfig — booleans", () => {
   it("env false overrides a config-true for stopSessionsOnExpiry", () => {
     const c = resolveConfig({ ...base, stopSessionsOnExpiry: true }, { RQ_STOP_SESSIONS: "false" });
     expect(c.stopSessionsOnExpiry).toBe(false);
+  });
+
+  it("resolves startTimerOnSessionStart from config and env", () => {
+    expect(
+      resolveConfig({ ...base, startTimerOnSessionStart: true }, {}).startTimerOnSessionStart
+    ).toBe(true);
+    expect(
+      resolveConfig(
+        { ...base, startTimerOnSessionStart: true },
+        { RQ_START_TIMER_ON_SESSION_START: "false" }
+      ).startTimerOnSessionStart
+    ).toBe(false);
   });
 });
 

@@ -57,6 +57,13 @@ interface MemberData {
   expiresAt: number;
   warned: boolean;
   claimed: boolean;
+  /**
+   * True once the full `sessionDurationMs` countdown is running. Set at claim,
+   * unless `startTimerOnSessionStart` is on — then it stays false (and
+   * `expiresAt` is a short loading deadline) until the client sends
+   * `session_started`.
+   */
+  timerStarted: boolean;
   /** True while a claim is mid-flight (session being acquired) to reject duplicates. */
   claiming?: boolean;
 }
@@ -823,6 +830,30 @@ export function createReactorQueueServer(
             break;
           }
 
+          case "session_started": {
+            // Start the full session countdown from now. Ignored before claim
+            // and once the timer is already running, so a client cannot send
+            // this repeatedly to extend its turn.
+            const member = await this.getMember(sender.id);
+            if (member && member.claimed && !member.timerStarted) {
+              const expiresAt = Date.now() + this.config.sessionDurationMs;
+              await this.setMember(sender.id, {
+                ...member,
+                expiresAt,
+                warned: false,
+                timerStarted: true,
+              });
+              await this.scheduleNextAlarm();
+              this.log(
+                "info",
+                "session_timer_started",
+                "Client reported playback start; session countdown running",
+                { connId: sender.id, data: { expiresAt } }
+              );
+            }
+            break;
+          }
+
           case "request_token": {
             const member = await this.getMember(sender.id);
             if (member) await this.sendMemberToken(sender);
@@ -878,7 +909,14 @@ export function createReactorQueueServer(
             continue;
           }
 
-          if (data.claimed && !data.warned && now >= data.expiresAt - this.config.warningBeforeMs) {
+          // No time_warning while the timer hasn't started (e.g. still loading
+          // under startTimerOnSessionStart) — the warning describes play time.
+          if (
+            data.claimed &&
+            data.timerStarted &&
+            !data.warned &&
+            now >= data.expiresAt - this.config.warningBeforeMs
+          ) {
             this.sendTo(connId, {
               type: "time_warning",
               secondsLeft: Math.round((data.expiresAt - now) / 1000),
@@ -948,7 +986,7 @@ export function createReactorQueueServer(
 
       for (const [, data] of members) {
         earliest = Math.min(earliest, data.expiresAt);
-        if (data.claimed && !data.warned) {
+        if (data.claimed && data.timerStarted && !data.warned) {
           earliest = Math.min(earliest, data.expiresAt - this.config.warningBeforeMs);
         }
       }
@@ -1012,6 +1050,7 @@ export function createReactorQueueServer(
             expiresAt: Date.now() + this.config.admissionGraceMs,
             warned: false,
             claimed: false,
+            timerStarted: false,
           });
 
           const activeCount = await this.getActiveMemberCount();
@@ -1072,7 +1111,12 @@ export function createReactorQueueServer(
       }
 
       const { slotId, sessionId, connectionId } = placement;
-      const expiresAt = Date.now() + this.config.sessionDurationMs;
+      // Under startTimerOnSessionStart the countdown waits for the client's
+      // `session_started`; until then the member gets a short loading deadline
+      // (admissionGraceMs) so an abandoned claim still frees the slot.
+      const deferTimer = this.config.startTimerOnSessionStart;
+      const expiresAt =
+        Date.now() + (deferTimer ? this.config.admissionGraceMs : this.config.sessionDurationMs);
       await this.setMember(connId, {
         ...member,
         slotId,
@@ -1082,6 +1126,7 @@ export function createReactorQueueServer(
         warned: false,
         claimed: true,
         claiming: false,
+        timerStarted: !deferTimer,
       });
 
       // The claim may have seated the member on a different slot than the one

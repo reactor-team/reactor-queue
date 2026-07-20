@@ -210,6 +210,83 @@ describe("alarm: grace, expiry, warning, liveness, and reconciliation", () => {
   });
 });
 
+describe("startTimerOnSessionStart: countdown starts on session_started, not at claim", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const member = async (h: Harness) => (await h.room.storage.get("member:a")) as any;
+
+  it("gives a claimed member a short loading deadline until session_started starts the countdown", async () => {
+    const h = makeHarness({
+      maxSessions: 1,
+      startTimerOnSessionStart: true,
+      admissionGraceMs: 50,
+      sessionDurationMs: 100_000,
+      pollIntervalMs: 1_000_000,
+    });
+    const a = await h.join("a");
+
+    const before = Date.now();
+    await h.send(a, { type: "claim" });
+    const claimed = await member(h);
+    // The session exists (the client can connect) but the countdown has not
+    // started: the deadline is the short loading deadline, not the full duration.
+    expect(a.types()).toContain("session_ready");
+    expect(claimed.timerStarted).toBe(false);
+    expect(claimed.expiresAt).toBeLessThan(before + 10_000);
+
+    await h.send(a, { type: "session_started" });
+    const started = await member(h);
+    expect(started.timerStarted).toBe(true);
+    expect(started.expiresAt).toBeGreaterThan(before + 50_000);
+  });
+
+  it("expires at the loading deadline when the client never reports playback", async () => {
+    const h = makeHarness({
+      maxSessions: 1,
+      startTimerOnSessionStart: true,
+      admissionGraceMs: 10,
+      sessionDurationMs: 1_000_000,
+      pollIntervalMs: 1_000_000,
+    });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" });
+    await sleep(25);
+    await h.server.onAlarm();
+    expect(a.ofType("expired").at(-1)).toMatchObject({ reason: "timeout" });
+  });
+
+  it("ignores a duplicate session_started (cannot extend the turn)", async () => {
+    const h = makeHarness({
+      maxSessions: 1,
+      startTimerOnSessionStart: true,
+      admissionGraceMs: 50,
+      sessionDurationMs: 100_000,
+      pollIntervalMs: 1_000_000,
+    });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" });
+    await h.send(a, { type: "session_started" });
+    const firstDeadline = (await member(h)).expiresAt;
+    await sleep(10);
+    await h.send(a, { type: "session_started" });
+    expect((await member(h)).expiresAt).toBe(firstDeadline);
+  });
+
+  it("default (off) starts the full countdown at claim, unchanged", async () => {
+    const h = makeHarness({
+      maxSessions: 1,
+      admissionGraceMs: 50,
+      sessionDurationMs: 100_000,
+      pollIntervalMs: 1_000_000,
+    });
+    const a = await h.join("a");
+    const before = Date.now();
+    await h.send(a, { type: "claim" });
+    const claimed = await member(h);
+    expect(claimed.timerStarted).toBe(true);
+    expect(claimed.expiresAt).toBeGreaterThan(before + 50_000);
+  });
+});
+
 describe("usersPerSession > 1", () => {
   it("packs members into one session, each with a distinct connection", async () => {
     const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });

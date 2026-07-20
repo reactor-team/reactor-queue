@@ -420,24 +420,25 @@ also reads from an env var that **overrides** the code value, so a deploy can be
 retuned without a code change. Values resolve **default → `createReactorQueueServer({...})`
 → env var** (env wins). The API key must come from a secret.
 
-| Env var                          | Config key                  | Default                   | Purpose                                                                                                            |
-| -------------------------------- | --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | Mints JWTs; creates/stops sessions                                                                                 |
-| `RQ_MODEL`                       | `model`                     | — (**required**)          | Model for `POST /sessions`                                                                                         |
-| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | Concurrent Reactor sessions (GPU ceiling)                                                                          |
-| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | Members per session (fill-in before create)                                                                        |
-| `RQ_WEBRTC_VERSION`              | `webrtcVersion`             | `1.0`                     | WebRTC version in session create body                                                                              |
-| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | Session budget after claim                                                                                         |
-| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | Time to claim a reserved slot                                                                                      |
-| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | Lead time for `time_warning`                                                                                       |
-| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime floor (scoped member tokens always cover grace + session)                                      |
-| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | Session reconciliation cadence                                                                                     |
-| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base URL                                                                                               |
-| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                                                                                       |
-| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry                                                                                         |
-| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | Password for admin dashboard connections                                                                           |
-| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`)                        |
-| `RQ_ALLOWED_ORIGINS`             | `allowedOrigins`            | — (allow all)             | Comma-separated `Origin` allow-list for WebSocket connections; unset accepts any origin, `*` allows all explicitly |
+| Env var                           | Config key                  | Default                   | Purpose                                                                                                                                                                     |
+| --------------------------------- | --------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RQ_REACTOR_API_KEY`              | `apiKey`                    | — (**required**, secret)  | Mints JWTs; creates/stops sessions                                                                                                                                          |
+| `RQ_MODEL`                        | `model`                     | — (**required**)          | Model for `POST /sessions`                                                                                                                                                  |
+| `RQ_MAX_SESSIONS`                 | `maxSessions`               | `1`                       | Concurrent Reactor sessions (GPU ceiling)                                                                                                                                   |
+| `RQ_USERS_PER_SESSION`            | `usersPerSession`           | `1`                       | Members per session (fill-in before create)                                                                                                                                 |
+| `RQ_WEBRTC_VERSION`               | `webrtcVersion`             | `1.0`                     | WebRTC version in session create body                                                                                                                                       |
+| `RQ_SESSION_DURATION_MS`          | `sessionDurationMs`         | `120000`                  | Session budget after claim                                                                                                                                                  |
+| `RQ_ADMISSION_GRACE_MS`           | `admissionGraceMs`          | `45000`                   | Time to claim a reserved slot                                                                                                                                               |
+| `RQ_WARNING_BEFORE_MS`            | `warningBeforeMs`           | `30000`                   | Lead time for `time_warning`                                                                                                                                                |
+| `RQ_TOKEN_TTL_SECONDS`            | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime floor (scoped member tokens always cover grace + session)                                                                                               |
+| `RQ_POLL_INTERVAL_MS`             | `pollIntervalMs`            | `15000`                   | Session reconciliation cadence                                                                                                                                              |
+| `RQ_COORDINATOR_URL`              | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base URL                                                                                                                                                        |
+| `RQ_API_VERSION`                  | `apiVersion`                | `1`                       | `Reactor-API-Version` header                                                                                                                                                |
+| `RQ_STOP_SESSIONS`                | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry                                                                                                                                                  |
+| `RQ_START_TIMER_ON_SESSION_START` | `startTimerOnSessionStart`  | `false`                   | Start each turn's countdown when the client reports playback (`session_started`) instead of at claim — see [Not counting load time](#not-counting-load-time-against-a-turn) |
+| `RQ_ADMIN_PASSWORD`               | `adminPassword`             | — (off)                   | Password for admin dashboard connections                                                                                                                                    |
+| `RQ_ALLOW_DUPLICATE_CONNECTIONS`  | `allowDuplicateConnections` | `false`                   | Allow the same browser to hold multiple connections (disables the duplicate-tab `rejected`)                                                                                 |
+| `RQ_ALLOWED_ORIGINS`              | `allowedOrigins`            | — (allow all)             | Comma-separated `Origin` allow-list for WebSocket connections; unset accepts any origin, `*` allows all explicitly                                                          |
 
 `acquireSession` / `releaseSession` are code-only overrides (functions, not env) —
 see [Overriding session lifecycle](#overriding-session-lifecycle).
@@ -556,6 +557,71 @@ So when the queue caps out at a number that isn't your `maxSessions` — e.g. yo
 account's concurrent-session quota is lower than the queue's ceiling — the admin
 log shows it plainly (`status: 403`, the quota message in `body`). The browser
 client only gets a generic `error` with `session_create_failed`.
+
+## Not counting load time against a turn
+
+By default a user's turn is `sessionDurationMs` long counted **from `claim()`** —
+the moment the queue creates their Reactor session. For most demos that's fine.
+But if your app does noticeable work _after_ claiming and _before_ anything plays
+— downloading assets, generating or building a world, warming up a model — that
+loading time is spent out of the user's turn. In the worst case the countdown can
+run low, or the "time's almost up" warning can fire, while the user is still
+staring at a loading screen.
+
+You can't just delay the `claim()` to fix this: the claim is what creates the
+session the client needs in order to connect and start loading in the first place.
+
+Set `startTimerOnSessionStart` (env `RQ_START_TIMER_ON_SESSION_START`) to move the
+start of the countdown from claim to the moment playback actually begins:
+
+```ts
+export default createReactorQueueServer({
+  model: "helios",
+  sessionDurationMs: 120_000,
+  startTimerOnSessionStart: true, // countdown starts on session_started, not claim
+});
+```
+
+With it on:
+
+1. **Claim** still creates the session immediately, so the client can connect and
+   load — but instead of the full `sessionDurationMs`, the member gets a short
+   deadline of `admissionGraceMs`. This is a safety cap: a client that claims and
+   then never starts playing (a stall, a closed tab mid-load) still frees its slot
+   for the next person instead of holding a GPU for the whole turn.
+2. **When playback begins**, your client calls `sessionStarted()`. The server then
+   starts the real `sessionDurationMs` countdown from that instant, and the
+   `time_warning` is measured against it — so no warning fires during loading.
+
+Call `sessionStarted()` at the point that means "the user's turn has really
+begun" for your app — typically the first rendered video frame:
+
+```ts
+// vanilla client
+queue.claim();
+const { sessionId, connectionId } = queue.getState();
+await reactor.connect(queue.getJwt, { sessionId: sessionId!, connectionId: connectionId! });
+// …once your app renders the first frame / playback is live:
+queue.sessionStarted();
+```
+
+```tsx
+// React: reach the underlying client via the escape-hatch hook
+import { useReactorQueueClient } from "@reactor-team/queue/react";
+
+const client = useReactorQueueClient();
+// in your "first frame" / "playback started" handler:
+client.sessionStarted();
+```
+
+Calling `sessionStarted()` more than once is harmless — only the first call after
+a claim starts the countdown, so a client can't use it to extend its own turn. On
+a server that doesn't have the option enabled, the call is simply ignored.
+
+> **Sizing note.** While loading, the member's deadline is `admissionGraceMs` —
+> the same value used for the claim-grace window. If your load can legitimately
+> take longer than that grace window, raise `admissionGraceMs` (or it will expire
+> mid-load), since the two share one value today.
 
 ## Overriding session lifecycle
 

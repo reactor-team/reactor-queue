@@ -166,12 +166,26 @@ export interface SessionEndedMessage {
   type: "session_ended";
 }
 
+/**
+ * Playback has begun on the client. Only meaningful when the server runs with
+ * `startTimerOnSessionStart`: the full `sessionDurationMs` countdown starts
+ * when this message arrives instead of at claim. Ignored otherwise.
+ */
+export interface SessionStartedMessage {
+  type: "session_started";
+}
+
 /** Leave the queue / release the slot without intending to rejoin. */
 export interface LeaveMessage {
   type: "leave";
 }
 
-export type ClientMessage = ClaimMessage | RequestTokenMessage | SessionEndedMessage | LeaveMessage;
+export type ClientMessage =
+  | ClaimMessage
+  | RequestTokenMessage
+  | SessionEndedMessage
+  | SessionStartedMessage
+  | LeaveMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin mode (server → admin client)

@@ -166,6 +166,18 @@ export class ReactorQueueClient {
   }
 
   /**
+   * Tell the server that playback has begun. When the server runs with
+   * `startTimerOnSessionStart`, the user's `sessionDurationMs` countdown
+   * starts on this call instead of at `claim()` — call it the moment your app
+   * actually starts streaming (e.g. on the first video frame), so time spent
+   * loading doesn't count against the user's turn. A no-op on servers without
+   * the option.
+   */
+  sessionStarted(): void {
+    this.send({ type: "session_started" });
+  }
+
+  /**
    * The Reactor session ended client-side (e.g. the user quit the turn): free
    * the slot so the queue slides, and return to `idle` so the app can show its
    * menu or a "play again" prompt. From an in-session phase this mirrors

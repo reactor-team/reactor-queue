@@ -87,6 +87,24 @@ export interface ReactorQueueServerConfig {
   allowDuplicateConnections?: boolean;
 
   /**
+   * Start each user's session countdown when their client reports that
+   * playback has begun (the `session_started` message), instead of at
+   * `claim()`.
+   *
+   * By default the `sessionDurationMs` countdown starts the moment a claim
+   * succeeds, so any client-side loading after the claim (downloading assets,
+   * building a world, model warm-up) eats into the user's play time. With this
+   * option on, `claim()` still creates the session — the client needs it to
+   * connect — but the countdown waits until the client calls
+   * `ReactorQueueClient.sessionStarted()`. Until then the member has a short
+   * deadline of `admissionGraceMs`, so a client that claims but never starts
+   * playing cannot hold the slot indefinitely.
+   *
+   * Default false. Env: `RQ_START_TIMER_ON_SESSION_START`.
+   */
+  startTimerOnSessionStart?: boolean;
+
+  /**
    * Cross-origin allow-list for incoming WebSocket connections. Each entry is an
    * exact `Origin` header value (scheme + host + optional port, no path), e.g.
    * `"https://demo.example.com"`. A single `"*"` entry allows any origin.
@@ -156,6 +174,8 @@ export interface ResolvedConfig {
   adminPassword: string | null;
   /** When true, the duplicate-tab (same `clientId`) rejection is disabled. */
   allowDuplicateConnections: boolean;
+  /** When true, the session countdown starts on `session_started` rather than at claim. */
+  startTimerOnSessionStart: boolean;
   /** Allowed `Origin` values for WebSocket connections. Empty = allow all. `["*"]` = allow all explicitly. */
   allowedOrigins: string[];
   /** Custom session acquisition, or null to create via the Reactor API. */
@@ -281,6 +301,8 @@ export function resolveConfig(config: ReactorQueueServerConfig, env: Env): Resol
     adminPassword: envStr(env, "RQ_ADMIN_PASSWORD") ?? config.adminPassword ?? null,
     allowDuplicateConnections:
       envBool(env, "RQ_ALLOW_DUPLICATE_CONNECTIONS") ?? config.allowDuplicateConnections ?? false,
+    startTimerOnSessionStart:
+      envBool(env, "RQ_START_TIMER_ON_SESSION_START") ?? config.startTimerOnSessionStart ?? false,
     allowedOrigins: envList(env, "RQ_ALLOWED_ORIGINS") ?? config.allowedOrigins ?? [],
     acquireSession: config.acquireSession ?? null,
     releaseSession: config.releaseSession ?? null,
