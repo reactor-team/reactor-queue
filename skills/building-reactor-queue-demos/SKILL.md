@@ -74,8 +74,9 @@ The PartyKit room is the **single source of truth**:
    on, so members sharing a slot hold distinct tokens. Binding works against a
    session that already exists, so tokens stay short-lived and `request_token`
    re-mints. A member still in the grace window has no session yet and receives
-   their token at claim. With an `acquireSession` override members get unscoped
-   tokens instead.
+   their token at claim. There is no unscoped fallback: an `acquireSession`
+   override must source sessions from the same **user** as the API key, or the
+   mint is refused and members get `token_mint_failed`.
 4. **Bounded turns** (default 120s after claim). On the last member leaving, the
    session is released (default: `DELETE /sessions/{id}`). The **server is the
    sole stopper** — adopting clients never `DELETE`, so a tab closing leaves the

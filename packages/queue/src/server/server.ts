@@ -138,16 +138,6 @@ export function createReactorQueueServer(
     }
 
     /**
-     * Whether members get session-scoped tokens (the default). An
-     * `acquireSession` override may return a session belonging to a principal
-     * this server's API key cannot bind against, and the Coordinator refuses
-     * such a mint, so those deployments keep unscoped member tokens.
-     */
-    private get scopedTokens(): boolean {
-      return !this.config.acquireSession;
-    }
-
-    /**
      * Mint one member's own token for `sessionId`: confined to the configured
      * model and bound to that single session. Binding at mint is what lets a
      * member operate a session the server created for them, so members sharing
@@ -1221,24 +1211,23 @@ export function createReactorQueueServer(
     }
 
     /**
-     * Send a member a token for the session their slot holds. In scoped mode a
-     * member still in the admission grace has no session to bind to yet and is
-     * answered at claim instead; the SDK has nothing to attach to until then,
-     * and its `getJwt` resolver re-asks over `request_token` when it does.
+     * Send a member a token for the session their slot holds. A member still in
+     * the admission grace has no session to bind to yet and is answered at
+     * claim instead; the SDK has nothing to attach to until then, and its
+     * `getJwt` resolver re-asks over `request_token` when it does.
+     *
+     * There is no unscoped path. A session an `acquireSession` override sourced
+     * from another user cannot be bound, and the Coordinator's refusal is
+     * reported as-is rather than quietly answered with an account-wide token.
      */
     private async sendMemberToken(conn: Party.Connection): Promise<void> {
       try {
-        if (this.scopedTokens) {
-          const member = await this.getMember(conn.id);
-          if (!member) return;
-          const slot = await this.getSlot(member.slotId);
-          if (!slot?.sessionId) return;
-          const token = await this.mintMemberToken(slot.sessionId);
-          this.send(conn, { type: "token", jwt: token.jwt, expiresAt: token.expiresAt });
-          return;
-        }
-        const { jwt, expiresAt } = await this.api.mintToken(this.config.tokenTtlSeconds);
-        this.send(conn, { type: "token", jwt, expiresAt });
+        const member = await this.getMember(conn.id);
+        if (!member) return;
+        const slot = await this.getSlot(member.slotId);
+        if (!slot?.sessionId) return;
+        const token = await this.mintMemberToken(slot.sessionId);
+        this.send(conn, { type: "token", jwt: token.jwt, expiresAt: token.expiresAt });
       } catch (err) {
         this.reportError("mintToken", err);
         this.send(conn, { type: "error", message: "token_mint_failed" });

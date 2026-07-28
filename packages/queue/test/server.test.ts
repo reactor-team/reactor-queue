@@ -394,16 +394,35 @@ describe("session-scoped member tokens", () => {
     expect(a.ofType("token").at(-1)!.jwt).not.toBe("stale-slot-jwt");
   });
 
-  it("keeps unscoped tokens when acquireSession sources sessions externally", async () => {
-    const h = makeHarness({
-      maxSessions: 1,
-      acquireSession: async () => "external-1",
-    });
+  it("binds an acquireSession-sourced session rather than falling back to unscoped", async () => {
+    const h = makeHarness({ maxSessions: 1, acquireSession: async () => "external-1" });
     const a = await h.join("a");
-    const mint = h.api.callsTo("/tokens").at(-1)!;
-    expect((mint.body as Record<string, unknown>).authorization_details).toBeUndefined();
     await h.send(a, { type: "claim" });
+
     expect(a.ofType("session_ready").at(-1)!.sessionId).toBe("external-1");
+    expect(bindOf(h.api.callsTo("/tokens").at(-1)!)).toEqual(["external-1"]);
+  });
+
+  it("never mints an unscoped token for a member", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });
+    const a = await h.join("a");
+    const b = await h.join("b");
+    await h.send(a, { type: "claim" });
+    await h.send(b, { type: "claim" });
+    await h.send(a, { type: "request_token" });
+
+    // The server's own JWT is the only unscoped mint; every token a member
+    // holds carries a bind.
+    const memberJwts = new Set(
+      [...a.ofType("token"), ...b.ofType("token")].map((m) => m.jwt as string)
+    );
+    const bound = new Set(
+      mintedTokens(h.api)
+        .filter((t, i) => bindOf(h.api.callsTo("/tokens")[i]!) !== undefined && t.scoped)
+        .map((t) => t.jwt)
+    );
+    expect(memberJwts.size).toBeGreaterThan(0);
+    for (const jwt of memberJwts) expect(bound.has(jwt)).toBe(true);
   });
 });
 
@@ -415,6 +434,28 @@ describe("token mint failure", () => {
     h.api.failTokensWith(500, "down");
     await h.send(a, { type: "request_token" });
     expect(a.ofType("error").at(-1)).toMatchObject({ message: "token_mint_failed" });
+  });
+
+  it("reports the refusal when a session cannot be bound, rather than going unscoped", async () => {
+    const h = makeHarness({
+      maxSessions: 1,
+      usersPerSession: 2,
+      acquireSession: async () => "someone-elses-session",
+    });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" }); // warms the server's own JWT
+
+    const before = h.api.countTo("/tokens");
+    h.api.failTokensWith(403, "requested session is not available to this API key");
+    const b = await h.join("b");
+    await h.send(b, { type: "claim" });
+
+    expect(b.ofType("error").at(-1)).toMatchObject({ message: "token_mint_failed" });
+    expect(b.ofType("token")).toHaveLength(0);
+    // Every refused mint still asked to bind; none retried without the scope.
+    const refused = h.api.callsTo("/tokens").slice(before);
+    expect(refused.length).toBeGreaterThan(0);
+    for (const mint of refused) expect(bindOf(mint)).toEqual(["someone-elses-session"]);
   });
 
   it("still seats a member whose token mint fails, leaving getJwt to retry", async () => {

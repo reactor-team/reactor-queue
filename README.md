@@ -610,15 +610,17 @@ createReactorQueueServer({
   participants.
 
 The queued user still attaches with `connect({ sessionId })` and the queue still
-mints the JWT, so a custom-acquired session must belong to the same Reactor
-account as the queue's API key. If another client shares the session with the
-queued user, the platform must allow more than one connection per session.
+mints the JWT. Member tokens are always bound to the session they are issued
+for, and a session can only be bound by **the same user** whose API key does the
+minting — the same Reactor _account_ is not enough. So a custom-acquired session
+must be created with `RQ_REACTOR_API_KEY`, or with another key belonging to that
+same user. Source one from a different user and the mint is refused: members
+receive `{ type: "error", message: "token_mint_failed" }` and the admin log
+carries the Coordinator's `403`. The queue will not fall back to an unscoped
+token to paper over it.
 
-With an `acquireSession` override the queue hands out **unscoped** member
-tokens. Binding a token to an existing session requires that session to belong
-to the same principal as the queue's API key, which an externally acquired
-session need not, so scoping it could lock members out. The default session
-source is what enables scoped tokens.
+If another client shares the session with the queued user, the platform must
+allow more than one connection per session.
 
 ## Configuration (client)
 
