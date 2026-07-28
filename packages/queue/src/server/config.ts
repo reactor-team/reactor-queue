@@ -45,10 +45,8 @@ export interface ReactorQueueServerConfig {
   /** Lead time for the `time_warning`, in ms. Env: `RQ_WARNING_BEFORE_MS`. */
   warningBeforeMs?: number;
   /**
-   * Requested lifetime floor for each minted Reactor JWT, in seconds. Member
-   * tokens are session-scoped and cannot be refreshed mid-session, so they are
-   * minted to cover at least the admission grace plus the full session budget
-   * regardless of this value; it only raises that floor. Env:
+   * Requested lifetime for each minted Reactor JWT, in seconds. Keep it short:
+   * the client refreshes over `request_token` as needed. Env:
    * `RQ_TOKEN_TTL_SECONDS`.
    */
   tokenTtlSeconds?: number;

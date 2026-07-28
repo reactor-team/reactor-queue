@@ -22,15 +22,24 @@ export class CoordinatorError extends Error {
 
 /**
  * Session authorization scope for a minted JWT. When passed to
- * {@link CoordinatorClient.mintToken}, the JWT is restricted to creating
- * sessions for the named model (at most `maxSessions` of them) and to
- * operating the sessions it created — nothing else on the account.
+ * {@link CoordinatorClient.mintToken}, the JWT is restricted to the named model
+ * and to the sessions its grant holds — nothing else on the account.
  */
 export interface TokenScope {
-  /** Model the token may create sessions for (fully-qualified `org/model`). */
+  /** Model the token is confined to (fully-qualified `org/model`). */
   model: string;
-  /** How many sessions the token may ever create (spawned, not concurrent). */
-  maxSessions: number;
+  /**
+   * Existing sessions the grant starts bound to. Each must still be open and
+   * owned by the API key doing the minting; the Coordinator answers `403`
+   * otherwise, and refuses a session whose model falls outside `model`.
+   */
+  sessions?: string[];
+  /**
+   * How many sessions the grant may hold over its lifetime. Left unset it
+   * resolves to the number of bound sessions, which leaves the token full on
+   * arrival: it operates what it was given and cannot create more.
+   */
+  maxSessions?: number;
 }
 
 /**
@@ -82,10 +91,10 @@ export class CoordinatorClient {
   /**
    * Exchange the API key for a JWT. `ttlSeconds` is passed as `expires_after`;
    * the Coordinator caps it at its server maximum. With a `scope`, the JWT
-   * carries session `authorization_details`: it can only create sessions for
-   * `scope.model` (at most `scope.maxSessions`) and act on the sessions it
-   * created. Bound sessions live on the token's server-side grant, so a
-   * scoped token cannot be re-minted for an existing session.
+   * carries session `authorization_details`: it is confined to `scope.model`
+   * and to the sessions on its grant, which `scope.sessions` can pre-populate
+   * with sessions that already exist. The bound set is server state rather than
+   * a claim, so it never appears in the token itself.
    */
   async mintToken(
     ttlSeconds: number,
@@ -105,8 +114,13 @@ export class CoordinatorClient {
               authorization_details: [
                 {
                   type: "session",
-                  resources: { models: { match: [scope.model] } },
-                  constraints: { max_sessions: scope.maxSessions },
+                  resources: {
+                    models: { match: [scope.model] },
+                    ...(scope.sessions?.length ? { sessions: { bind: scope.sessions } } : {}),
+                  },
+                  ...(scope.maxSessions === undefined
+                    ? {}
+                    : { constraints: { max_sessions: scope.maxSessions } }),
                 },
               ],
             }
@@ -168,15 +182,9 @@ export class CoordinatorClient {
   /**
    * Create a Reactor session for the configured model. Returns the new
    * `session_id`. Runs billing/quota checks against the server's API key.
-   * With `opts.jwt` the session is created by that token — for a scoped
-   * token, this is the step that binds the session to its grant.
    */
-  async createSession(opts: {
-    model: string;
-    webrtcVersion: string;
-    jwt?: string;
-  }): Promise<string> {
-    const jwt = opts.jwt ?? (await this.getServerJwt());
+  async createSession(opts: { model: string; webrtcVersion: string }): Promise<string> {
+    const jwt = await this.getServerJwt();
     const res = await fetch(`${this.baseUrl}/sessions`, {
       method: "POST",
       headers: {
@@ -210,17 +218,14 @@ export class CoordinatorClient {
 
   /**
    * Register a WebRTC connection under an existing session and return the
-   * server-minted `connection_id`. This is a transport call (carries
-   * `Reactor-WebRTC-Version`, not the API-version headers) and must use a JWT
-   * allowed to act on the session: pass `opts.jwt` for the scoped token whose
-   * grant owns the session, or omit it to use the server JWT (same-user
-   * ownership, minted from the same API key).
+   * server-minted `connection_id`. This is a transport call, so it carries
+   * `Reactor-WebRTC-Version` rather than the API-version headers.
    *
    * A {@link CoordinatorError} with `status === 429` means the session hit its
    * `connections_per_session` cap; the caller falls back to another/new session.
    */
-  async createConnection(sessionId: string, opts: { jwt?: string } = {}): Promise<number> {
-    const jwt = opts.jwt ?? (await this.getServerJwt());
+  async createConnection(sessionId: string): Promise<number> {
+    const jwt = await this.getServerJwt();
     const endpoint = `/sessions/${encodeURIComponent(sessionId)}/transport/webrtc/connections`;
     const res = await fetch(`${this.baseUrl}${endpoint}`, {
       method: "POST",

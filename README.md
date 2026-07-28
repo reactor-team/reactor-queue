@@ -273,15 +273,14 @@ The queue server is the single source of truth. It:
    every connection; the client only adopts them. Creating nothing during grace
    means an abandoned admission never orphans a GPU session.
 3. Mints the Reactor JWT server-side (the API key is a server secret) and sends it
-   only to admitted users. Each slot gets its own **session-scoped** token
-   (`authorization_details` on `POST /tokens`): it can create one session for the
-   configured model and act only on that session — a leaked token exposes nothing
-   else on the account. The slot's session is created _with_ that token, which is
-   what binds the two together.
-4. Issues each member their slot's token. A scoped token is the session bond and
-   cannot be refreshed mid-session, so it is minted to outlive the slot (grace +
-   session budget; `tokenTtlSeconds` only raises that floor). `request_token` /
-   the `getJwt` resolver re-deliver the stored token.
+   only to admitted users. Every member gets their **own session-scoped** token
+   (`authorization_details` on `POST /tokens`), bound at mint to the one session
+   they were seated on: it acts on that session and nothing else on the account,
+   so members sharing a slot hold distinct tokens rather than copies of one.
+4. Issues short-lived tokens (default 60s). Because a token can be bound to a
+   session that already exists, it is re-minted on demand — the client refreshes
+   over the WebSocket via `request_token`, exposed as a standard `getJwt`
+   resolver for the Reactor SDK.
 5. Gives each admitted user a bounded session (default 120s), then calls
    `DELETE /sessions/{id}` to stop the GPU session when time runs out.
 6. Frees a slot the instant a member leaves — via an explicit `session_ended`
@@ -430,7 +429,7 @@ retuned without a code change. Values resolve **default → `createReactorQueueS
 | `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | Session budget after claim                                                                                         |
 | `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | Time to claim a reserved slot                                                                                      |
 | `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | Lead time for `time_warning`                                                                                       |
-| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime floor (scoped member tokens always cover grace + session)                                      |
+| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | Minted JWT lifetime                                                                                                |
 | `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | Session reconciliation cadence                                                                                     |
 | `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base URL                                                                                               |
 | `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                                                                                       |
@@ -616,10 +615,10 @@ account as the queue's API key. If another client shares the session with the
 queued user, the platform must allow more than one connection per session.
 
 With an `acquireSession` override the queue hands out **unscoped** member
-tokens: the externally acquired session is not bound to any token the queue
-holds, and a session-scoped token can only act on sessions its own grant
-created, so scoping would lock members out. The default session source is what
-enables scoped tokens.
+tokens. Binding a token to an existing session requires that session to belong
+to the same principal as the queue's API key, which an externally acquired
+session need not, so scoping it could lock members out. The default session
+source is what enables scoped tokens.
 
 ## Configuration (client)
 
