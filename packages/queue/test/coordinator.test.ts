@@ -67,6 +67,40 @@ describe("CoordinatorClient.mintToken", () => {
     ]);
   });
 
+  it("binds existing sessions and omits the limit so the grant arrives full", async () => {
+    const { calls } = stubFetch([{ status: 200, body: { jwt: "bound", expires_at: 500 } }]);
+    await new CoordinatorClient(opts).mintToken(60, {
+      model: "reactor/helios",
+      sessions: ["sess-1"],
+    });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.authorization_details).toEqual([
+      {
+        type: "session",
+        resources: { models: { match: ["reactor/helios"] }, sessions: { bind: ["sess-1"] } },
+      },
+    ]);
+  });
+
+  it("keeps an explicit limit alongside bound sessions", async () => {
+    const { calls } = stubFetch([{ status: 200, body: { jwt: "bound", expires_at: 500 } }]);
+    await new CoordinatorClient(opts).mintToken(60, {
+      model: "reactor/helios",
+      sessions: ["sess-1"],
+      maxSessions: 3,
+    });
+    const detail = JSON.parse(calls[0]!.init.body as string).authorization_details[0];
+    expect(detail.resources.sessions).toEqual({ bind: ["sess-1"] });
+    expect(detail.constraints).toEqual({ max_sessions: 3 });
+  });
+
+  it("omits an empty bind list rather than sending sessions: { bind: [] }", async () => {
+    const { calls } = stubFetch([{ status: 200, body: { jwt: "scoped", expires_at: 500 } }]);
+    await new CoordinatorClient(opts).mintToken(60, { model: "reactor/helios", sessions: [] });
+    const detail = JSON.parse(calls[0]!.init.body as string).authorization_details[0];
+    expect(detail.resources).toEqual({ models: { match: ["reactor/helios"] } });
+  });
+
   it("omits authorization_details without a scope", async () => {
     const { calls } = stubFetch([{ status: 200, body: { jwt: "j", expires_at: 1 } }]);
     await new CoordinatorClient(opts).mintToken(60);
@@ -177,19 +211,6 @@ describe("CoordinatorClient.createSession", () => {
     expect(body.supported_transports).toEqual([{ protocol: "webrtc", version: "1.0" }]);
   });
 
-  it("uses an explicit jwt without minting a server JWT", async () => {
-    const { calls } = stubFetch([{ status: 201, body: { session_id: "sess-9" } }]);
-    const id = await new CoordinatorClient(opts).createSession({
-      model: "helios",
-      webrtcVersion: "1.0",
-      jwt: "slot-jwt",
-    });
-    expect(id).toBe("sess-9");
-    expect(calls.some((c) => c.url.endsWith("/tokens"))).toBe(false);
-    const headers = calls[0]!.init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer slot-jwt");
-  });
-
   it("throws when the response has no session_id", async () => {
     stubFetch([
       { status: 200, body: { jwt: "j", expires_at: Math.floor(Date.now() / 1000) + 600 } },
@@ -225,15 +246,6 @@ describe("CoordinatorClient.createConnection", () => {
     const mint = calls.find((c) => c.url.endsWith("/connections"))!;
     expect(mint.url).toBe("https://coord.test/sessions/sess-1/transport/webrtc/connections");
     expect((mint.init.headers as Record<string, string>)["Reactor-WebRTC-Version"]).toBe("1.0");
-  });
-
-  it("uses an explicit jwt without minting a server JWT", async () => {
-    const { calls } = stubFetch([{ status: 201, body: { connection_id: 3 } }]);
-    const id = await new CoordinatorClient(opts).createConnection("sess-1", { jwt: "slot-jwt" });
-    expect(id).toBe(3);
-    expect(calls.some((c) => c.url.endsWith("/tokens"))).toBe(false);
-    const headers = calls[0]!.init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer slot-jwt");
   });
 
   it("raises a 429 CoordinatorError when the session is at its connection cap", async () => {

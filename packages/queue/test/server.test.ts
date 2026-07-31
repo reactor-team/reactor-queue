@@ -59,12 +59,11 @@ afterEach(() => {
 });
 
 describe("admission, FIFO, and capacity", () => {
-  it("admits the first user and mints a token immediately", async () => {
+  it("admits the first user without touching the Coordinator", async () => {
     const h = makeHarness({ maxSessions: 1, usersPerSession: 1 });
     const a = await h.join("a");
     expect(a.types()).toContain("admitted");
-    expect(a.types()).toContain("token");
-    expect(a.ofType("token")[0]!.jwt).toBe("jwt-1");
+    expect(h.api.calls).toHaveLength(0);
   });
 
   it("queues the second user behind a full capacity ceiling, 1-based", async () => {
@@ -240,103 +239,145 @@ describe("usersPerSession > 1", () => {
   });
 });
 
+/** The `bind` list a `POST /tokens` call asked for, or undefined if unscoped. */
+function bindOf(call: { body: unknown }): string[] | undefined {
+  const details = (call.body as { authorization_details?: Array<Record<string, never>> })
+    .authorization_details;
+  return (details?.[0] as unknown as { resources?: { sessions?: { bind?: string[] } } } | undefined)
+    ?.resources?.sessions?.bind;
+}
+
+/**
+ * The `jwt-N` the mock hands back for each `POST /tokens`, paired with whether
+ * that mint asked for a scope — the mock numbers tokens in call order.
+ */
+function mintedTokens(api: CoordinatorMock): Array<{ jwt: string; scoped: boolean }> {
+  return api.callsTo("/tokens").map((call, i) => ({
+    jwt: `jwt-${i + 1}`,
+    scoped: (call.body as Record<string, unknown>).authorization_details !== undefined,
+  }));
+}
+
 describe("session-scoped member tokens", () => {
-  it("mints the slot token with authorization_details covering grace + session", async () => {
-    const h = makeHarness({
-      maxSessions: 1,
-      usersPerSession: 1,
-      admissionGraceMs: 45_000,
-      sessionDurationMs: 120_000,
-      tokenTtlSeconds: 60,
-    });
-    await h.join("a");
+  it("sends no token during grace, when there is no session to bind to yet", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 1 });
+    const a = await h.join("a");
+    expect(a.ofType("token")).toHaveLength(0);
+    expect(h.api.countTo("/tokens")).toBe(0);
+  });
+
+  it("binds the member's token to the session they claimed, before session_ready", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 1, tokenTtlSeconds: 60 });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" });
+
+    const sessionId = a.ofType("session_ready").at(-1)!.sessionId;
     const mint = h.api.callsTo("/tokens").at(-1)!;
-    const body = mint.body as {
-      expires_after: number;
-      authorization_details: unknown;
-    };
+    const body = mint.body as { expires_after: number; authorization_details: unknown };
+    expect(body.expires_after).toBe(60);
+    // No `constraints`: the limit resolves to the bound count, so the grant is
+    // full on arrival and the token cannot open a session of its own.
     expect(body.authorization_details).toEqual([
       {
         type: "session",
-        resources: { models: { match: ["helios"] } },
-        constraints: { max_sessions: 1 },
+        resources: { models: { match: ["helios"] }, sessions: { bind: [sessionId] } },
       },
     ]);
-    // The slot token is the session bond and cannot be refreshed, so its TTL
-    // must cover the grace window plus the full session budget.
-    expect(body.expires_after).toBeGreaterThanOrEqual((45_000 + 120_000) / 1000);
+
+    const order = a.types();
+    expect(order.indexOf("token")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("token")).toBeLessThan(order.indexOf("session_ready"));
   });
 
-  it("creates the session and connection with the slot token and re-delivers it", async () => {
-    const h = makeHarness({ maxSessions: 1, usersPerSession: 1 });
-    const a = await h.join("a");
-    const admissionJwt = a.ofType("token").at(-1)!.jwt as string;
-    await h.send(a, { type: "claim" });
-
-    const create = h.api.calls.find((c) => c.method === "POST" && c.url.endsWith("/sessions"))!;
-    expect(create.headers["Authorization"]).toBe(`Bearer ${admissionJwt}`);
-    const conn = h.api.callsTo("/connections").at(-1)!;
-    expect(conn.headers["Authorization"]).toBe(`Bearer ${admissionJwt}`);
-
-    // Claim re-sends the slot token (same jwt) and request_token re-delivers
-    // it without a second mint — a fresh scoped token would have an empty
-    // grant and could not attach to the existing session.
-    expect(a.ofType("token").at(-1)!.jwt).toBe(admissionJwt);
-    const mintsBefore = h.api.countTo("/tokens");
-    await h.send(a, { type: "request_token" });
-    expect(a.ofType("token").at(-1)!.jwt).toBe(admissionJwt);
-    expect(h.api.countTo("/tokens")).toBe(mintsBefore);
-  });
-
-  it("shares one slot token between members of a shared session", async () => {
+  it("gives members of one shared session distinct tokens", async () => {
     const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });
     const a = await h.join("a");
     const b = await h.join("b");
-    expect(a.ofType("token").at(-1)!.jwt).toBe(b.ofType("token").at(-1)!.jwt);
+    await h.send(a, { type: "claim" });
+    await h.send(b, { type: "claim" });
+
+    const sessionId = a.ofType("session_ready").at(-1)!.sessionId;
+    expect(b.ofType("session_ready").at(-1)!.sessionId).toBe(sessionId);
+    expect(a.ofType("token").at(-1)!.jwt).not.toBe(b.ofType("token").at(-1)!.jwt);
+    for (const mint of h.api.callsTo("/tokens").filter((c) => bindOf(c))) {
+      expect(bindOf(mint)).toEqual([sessionId]);
+    }
   });
 
-  it("hands a spilled member the new slot's token before session_ready", async () => {
+  it("hands a member seated on an already-running slot their token at admission", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" });
+    const b = await h.join("b");
+
+    expect(bindOf(h.api.callsTo("/tokens").at(-1)!)).toEqual([
+      a.ofType("session_ready").at(-1)!.sessionId,
+    ]);
+    expect(b.ofType("token")).toHaveLength(1);
+  });
+
+  it("re-mints on request_token rather than re-delivering the same token", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 1 });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" });
+    const first = a.ofType("token").at(-1)!.jwt;
+
+    const before = h.api.countTo("/tokens");
+    await h.send(a, { type: "request_token" });
+    expect(h.api.countTo("/tokens")).toBe(before + 1);
+    expect(a.ofType("token").at(-1)!.jwt).not.toBe(first);
+    expect(bindOf(h.api.callsTo("/tokens").at(-1)!)).toEqual([
+      a.ofType("session_ready").at(-1)!.sessionId,
+    ]);
+  });
+
+  it("binds a spilled member's token to the session they actually landed on", async () => {
     const h = makeHarness({ maxSessions: 2, usersPerSession: 2 });
     const a = await h.join("a");
     const b = await h.join("b"); // same slot as a
     await h.send(a, { type: "claim" });
-    const slot1Jwt = a.ofType("token").at(-1)!.jwt as string;
 
     // b's connection mint on the shared session hits the cap once, spilling
-    // b to a brand-new slot with its own token and session.
+    // b to a brand-new slot with its own session.
     h.api.failNextConnections(1, 429, "connections_per_session");
     await h.send(b, { type: "claim" });
 
-    const readyB = b.ofType("session_ready").at(-1)!;
-    expect(readyB.sessionId).not.toBe(a.ofType("session_ready").at(-1)!.sessionId);
-    const bJwt = b.ofType("token").at(-1)!.jwt as string;
-    expect(bJwt).not.toBe(slot1Jwt);
-    // The new session was created by b's (new) slot token.
-    const creates = h.api.calls.filter((c) => c.method === "POST" && c.url.endsWith("/sessions"));
-    expect(creates.at(-1)!.headers["Authorization"]).toBe(`Bearer ${bJwt}`);
+    const sessionB = b.ofType("session_ready").at(-1)!.sessionId;
+    expect(sessionB).not.toBe(a.ofType("session_ready").at(-1)!.sessionId);
+    expect(bindOf(h.api.callsTo("/tokens").at(-1)!)).toEqual([sessionB]);
   });
 
-  it("keeps unscoped tokens when acquireSession sources sessions externally", async () => {
-    const h = makeHarness({
-      maxSessions: 1,
-      acquireSession: async () => "external-1",
-    });
+  it("never authorizes a session or connection call with a member token", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });
     const a = await h.join("a");
-    const mint = h.api.callsTo("/tokens").at(-1)!;
-    expect((mint.body as Record<string, unknown>).authorization_details).toBeUndefined();
+    const b = await h.join("b");
     await h.send(a, { type: "claim" });
-    expect(a.ofType("session_ready").at(-1)!.sessionId).toBe("external-1");
+    await h.send(b, { type: "claim" });
+
+    const scoped = new Set(
+      mintedTokens(h.api)
+        .filter((t) => t.scoped)
+        .map((t) => `Bearer ${t.jwt}`)
+    );
+    expect(scoped.size).toBeGreaterThan(0);
+    const serverCalls = h.api.calls.filter((c) => c.method !== "GET" && !c.url.endsWith("/tokens"));
+    expect(serverCalls.length).toBeGreaterThan(0);
+    for (const call of serverCalls) {
+      expect(scoped.has(call.headers["Authorization"]!)).toBe(false);
+    }
   });
 
-  it("falls back to an unscoped token for a legacy slot with a grant-less session", async () => {
+  it("binds a token for a slot persisted before this version", async () => {
     const h = makeHarness({ maxSessions: 1, usersPerSession: 1 });
-    // Plant pre-upgrade state: a slot whose session exists but carries no jwt,
-    // as persisted by a version before scoped tokens.
+    // A slot written by an earlier version carries its own `jwt`; the session
+    // it created belongs to the same API key, so it binds like any other.
     await h.room.storage.put("slot:legacy", {
       slotId: "legacy",
       sessionId: "sess-old",
       members: ["a"],
       createdAt: Date.now(),
+      jwt: "stale-slot-jwt",
+      jwtExpiresAt: Math.floor(Date.now() / 1000) + 600,
     });
     await h.room.storage.put("member:a", {
       slotId: "legacy",
@@ -349,19 +390,86 @@ describe("session-scoped member tokens", () => {
     const a = h.room.register(new FakeConnection("a"));
     await h.server.onMessage(JSON.stringify({ type: "request_token" }), a);
 
-    const mint = h.api.callsTo("/tokens").at(-1)!;
-    expect((mint.body as Record<string, unknown>).authorization_details).toBeUndefined();
-    expect(a.ofType("token")).toHaveLength(1);
+    expect(bindOf(h.api.callsTo("/tokens").at(-1)!)).toEqual(["sess-old"]);
+    expect(a.ofType("token").at(-1)!.jwt).not.toBe("stale-slot-jwt");
+  });
+
+  it("binds an acquireSession-sourced session rather than falling back to unscoped", async () => {
+    const h = makeHarness({ maxSessions: 1, acquireSession: async () => "external-1" });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" });
+
+    expect(a.ofType("session_ready").at(-1)!.sessionId).toBe("external-1");
+    expect(bindOf(h.api.callsTo("/tokens").at(-1)!)).toEqual(["external-1"]);
+  });
+
+  it("never mints an unscoped token for a member", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });
+    const a = await h.join("a");
+    const b = await h.join("b");
+    await h.send(a, { type: "claim" });
+    await h.send(b, { type: "claim" });
+    await h.send(a, { type: "request_token" });
+
+    // The server's own JWT is the only unscoped mint; every token a member
+    // holds carries a bind.
+    const memberJwts = new Set(
+      [...a.ofType("token"), ...b.ofType("token")].map((m) => m.jwt as string)
+    );
+    const bound = new Set(
+      mintedTokens(h.api)
+        .filter((t, i) => bindOf(h.api.callsTo("/tokens")[i]!) !== undefined && t.scoped)
+        .map((t) => t.jwt)
+    );
+    expect(memberJwts.size).toBeGreaterThan(0);
+    for (const jwt of memberJwts) expect(bound.has(jwt)).toBe(true);
   });
 });
 
 describe("token mint failure", () => {
-  it("still admits but surfaces a token error to the client", async () => {
+  it("surfaces a token error when a member's mint fails", async () => {
     const h = makeHarness({ maxSessions: 1 });
-    h.api.failTokensWith(500, "down");
     const a = await h.join("a");
-    expect(a.types()).toContain("admitted");
+    await h.send(a, { type: "claim" });
+    h.api.failTokensWith(500, "down");
+    await h.send(a, { type: "request_token" });
     expect(a.ofType("error").at(-1)).toMatchObject({ message: "token_mint_failed" });
+  });
+
+  it("reports the refusal when a session cannot be bound, rather than going unscoped", async () => {
+    const h = makeHarness({
+      maxSessions: 1,
+      usersPerSession: 2,
+      acquireSession: async () => "someone-elses-session",
+    });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" }); // warms the server's own JWT
+
+    const before = h.api.countTo("/tokens");
+    h.api.failTokensWith(403, "requested session is not available to this API key");
+    const b = await h.join("b");
+    await h.send(b, { type: "claim" });
+
+    expect(b.ofType("error").at(-1)).toMatchObject({ message: "token_mint_failed" });
+    expect(b.ofType("token")).toHaveLength(0);
+    // Every refused mint still asked to bind; none retried without the scope.
+    const refused = h.api.callsTo("/tokens").slice(before);
+    expect(refused.length).toBeGreaterThan(0);
+    for (const mint of refused) expect(bindOf(mint)).toEqual(["someone-elses-session"]);
+  });
+
+  it("still seats a member whose token mint fails, leaving getJwt to retry", async () => {
+    const h = makeHarness({ maxSessions: 1, usersPerSession: 2 });
+    const a = await h.join("a");
+    await h.send(a, { type: "claim" }); // warms the server JWT and the session
+    h.api.failTokensWith(500, "down");
+
+    const b = await h.join("b");
+    await h.send(b, { type: "claim" });
+    expect(b.ofType("error").at(-1)).toMatchObject({ message: "token_mint_failed" });
+    expect(b.ofType("session_ready").at(-1)!.sessionId).toBe(
+      a.ofType("session_ready").at(-1)!.sessionId
+    );
   });
 });
 
@@ -453,8 +561,8 @@ describe("admin mode", () => {
 
   it("persists warn/error events to history but not high-frequency info events", async () => {
     const h = makeHarness({ adminPassword: "secret", maxSessions: 1 });
-    h.api.failTokensWith(500, "down"); // makes admission log an error (mint failed)
-    await h.join("a");
+    h.api.failSessionsWith(500, "down"); // makes the claim log an error
+    await h.send(await h.join("a"), { type: "claim" });
 
     const conn = await admin(h, "admin-1");
     await h.send(conn, { type: "admin_auth", password: "secret" });

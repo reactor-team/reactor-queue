@@ -69,12 +69,14 @@ The PartyKit room is the **single source of truth**:
    `connections_per_session` cap) makes the queue spill the member to another or
    new session.
 3. **Mints session-scoped JWTs** only for admitted members (the `getJwt`
-   resolver). Each slot has one scoped token (`authorization_details`,
-   `max_sessions: 1`, matched to the configured model); the slot's session is
-   created _with_ it, binding the two, and every member seated on the slot
-   receives that token. It cannot be refreshed mid-session (the grant is the
-   bond), so it is minted to cover grace + the full session budget. With an
-   `acquireSession` override members get legacy unscoped tokens instead.
+   resolver). Each member gets their own token (`authorization_details`, matched
+   to the configured model) bound at mint to the one session they were seated
+   on, so members sharing a slot hold distinct tokens. Binding works against a
+   session that already exists, so tokens stay short-lived and `request_token`
+   re-mints. A member still in the grace window has no session yet and receives
+   their token at claim. There is no unscoped fallback: an `acquireSession`
+   override must source sessions from the same **user** as the API key, or the
+   mint is refused and members get `token_mint_failed`.
 4. **Bounded turns** (default 120s after claim). On the last member leaving, the
    session is released (default: `DELETE /sessions/{id}`). The **server is the
    sole stopper** — adopting clients never `DELETE`, so a tab closing leaves the
@@ -113,9 +115,10 @@ You never call these directly — the queue does:
 
 - **Token minting**: `POST /tokens` with `Reactor-API-Key: rk_...`,
   `{"expires_after": <seconds>}`, and (for member tokens) session
-  `authorization_details` scoping the JWT to one session for the configured
-  model → `{ jwt, expires_at }`. The API key is a **server secret**; the
-  browser only ever sees minted, scoped JWTs.
+  `authorization_details` carrying `resources.sessions.bind` — the member's JWT
+  is scoped to the configured model and bound to their one session → `{ jwt,
+expires_at }`. The API key is a **server secret**; the browser only ever sees
+  minted, scoped JWTs.
 - **Session lifecycle**: with a queue the **server** owns the session and the SDK
   **attaches** via `connect(jwt, { sessionId, connectionId })`. States
   `CREATED → PENDING → WAITING → ACTIVE → INACTIVE → CLOSED`. No webhook for end —
@@ -269,27 +272,27 @@ from an env var that overrides the code value (per-deploy tuning). Resolution
 order: **built-in default → `createReactorQueueServer({...})` → env var** (env
 wins). The API key MUST come from a secret, never code.
 
-| Env var                          | Config key                  | Default                   | Purpose                                                  |
-| -------------------------------- | --------------------------- | ------------------------- | -------------------------------------------------------- |
-| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | mint JWTs; create/stop sessions                          |
-| `RQ_MODEL`                       | `model`                     | — (**required**)          | model for `POST /sessions`                               |
-| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | concurrent Reactor sessions                              |
-| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | members per session                                      |
-| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | session budget after claim                               |
-| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | time to claim a reserved slot                            |
-| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | lead time for `time_warning`                             |
-| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | JWT lifetime floor (scoped tokens cover grace + session) |
-| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | session reconciliation cadence                           |
-| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base                                         |
-| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                             |
-| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry (default release)             |
-| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | allow same browser in multiple tabs                      |
-| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | enables admin mode (see below)                           |
+| Env var                          | Config key                  | Default                   | Purpose                                      |
+| -------------------------------- | --------------------------- | ------------------------- | -------------------------------------------- |
+| `RQ_REACTOR_API_KEY`             | `apiKey`                    | — (**required**, secret)  | mint JWTs; create/stop sessions              |
+| `RQ_MODEL`                       | `model`                     | — (**required**)          | model for `POST /sessions`                   |
+| `RQ_MAX_SESSIONS`                | `maxSessions`               | `1`                       | concurrent Reactor sessions                  |
+| `RQ_USERS_PER_SESSION`           | `usersPerSession`           | `1`                       | members per session                          |
+| `RQ_SESSION_DURATION_MS`         | `sessionDurationMs`         | `120000`                  | session budget after claim                   |
+| `RQ_ADMISSION_GRACE_MS`          | `admissionGraceMs`          | `45000`                   | time to claim a reserved slot                |
+| `RQ_WARNING_BEFORE_MS`           | `warningBeforeMs`           | `30000`                   | lead time for `time_warning`                 |
+| `RQ_TOKEN_TTL_SECONDS`           | `tokenTtlSeconds`           | `60`                      | minted JWT lifetime (keep short)             |
+| `RQ_POLL_INTERVAL_MS`            | `pollIntervalMs`            | `15000`                   | session reconciliation cadence               |
+| `RQ_COORDINATOR_URL`             | `coordinatorUrl`            | `https://api.reactor.inc` | Reactor API base                             |
+| `RQ_API_VERSION`                 | `apiVersion`                | `1`                       | `Reactor-API-Version` header                 |
+| `RQ_STOP_SESSIONS`               | `stopSessionsOnExpiry`      | `true`                    | `DELETE` session on expiry (default release) |
+| `RQ_ALLOW_DUPLICATE_CONNECTIONS` | `allowDuplicateConnections` | `false`                   | allow same browser in multiple tabs          |
+| `RQ_ADMIN_PASSWORD`              | `adminPassword`             | — (off)                   | enables admin mode (see below)               |
 
 Tuning intuition: throughput ≈ `(maxSessions × usersPerSession) / sessionDurationMs`.
 Shorter sessions / more slots move the line faster but cost more GPU.
-`admissionGraceMs` must be < `tokenTtlSeconds` so the first token is still valid
-when the user clicks Enter; both defaults satisfy this.
+`tokenTtlSeconds` is independent of the grace window: a member's token is minted
+against the session they claim, so it starts counting from claim, not admission.
 
 ### Hooks (observe-only; not env-configurable)
 
