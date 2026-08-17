@@ -27,6 +27,6 @@
     "@types/react-dom": "^19.0.0",
     "concurrently": "^10.0.3",
     "partykit": "^0.0.115",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
