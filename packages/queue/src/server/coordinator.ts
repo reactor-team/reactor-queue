@@ -252,12 +252,17 @@ export class CoordinatorClient {
 
   /** Force-close a session. Swallows "already gone" responses. */
   async stopSession(sessionId: string, reason = "queue: session time elapsed"): Promise<void> {
-    const jwt = await this.getServerJwt();
+    // The Bearer JWT the other calls use is minted as a session-type credential
+    // (the coordinator stamps every /tokens mint with session
+    // authorization_details, scoped or not), and a session-scoped JWT cannot
+    // authorize a cross-resource DELETE on /sessions — it 403s, leaking the
+    // session and its seat. Only the raw API key may force-close an arbitrary
+    // session, so the DELETE carries it directly instead of the minted JWT.
     const res = await fetch(`${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${jwt}`,
+        "Reactor-API-Key": this.apiKey,
         ...this.versionHeaders(),
       },
       body: JSON.stringify({ reason }),
